@@ -56,8 +56,9 @@ async def ping(ctx):
 
 # ─── คำสั่ง: !info ─────────────────────────────────────────────────────────────
 @bot.command(name='info')
+@commands.guild_only()
 async def info(ctx):
-    """แสดงข้อมูลเซิร์ฟเวอร์"""
+    """แสดงข้อมูลเซิร์ฟเวอร์ (ใช้ได้เฉพาะในเซิร์ฟเวอร์)"""
     guild = ctx.guild
     embed = discord.Embed(
         title=f'ℹ️ ข้อมูลเซิร์ฟเวอร์: {guild.name}',
@@ -72,8 +73,15 @@ async def info(ctx):
 # ─── คำสั่ง: !clear ────────────────────────────────────────────────────────────
 @bot.command(name='clear')
 @commands.has_permissions(manage_messages=True)
+@commands.guild_only()
 async def clear(ctx, amount: int = 5):
-    """ลบข้อความในห้อง (ต้องการสิทธิ์ Manage Messages)"""
+    """ลบข้อความในห้อง (ต้องการสิทธิ์ Manage Messages) สูงสุด 100 ข้อความ"""
+    if amount < 1:
+        await ctx.send('⚠️ กรุณาระบุจำนวนมากกว่า 0')
+        return
+    if amount > 100:
+        await ctx.send('⚠️ ลบได้สูงสุด 100 ข้อความต่อครั้ง')
+        return
     await ctx.channel.purge(limit=amount + 1)
     msg = await ctx.send(f'🗑️ ลบ {amount} ข้อความแล้ว!')
     await msg.delete(delay=3)
@@ -81,14 +89,21 @@ async def clear(ctx, amount: int = 5):
 # ─── Error Handler ─────────────────────────────────────────────────────────────
 @bot.event
 async def on_command_error(ctx, error):
+    import traceback
     if isinstance(error, commands.MissingPermissions):
         await ctx.send('❌ คุณไม่มีสิทธิ์ใช้คำสั่งนี้!')
     elif isinstance(error, commands.CommandNotFound):
-        await ctx.send(f'❓ ไม่พบคำสั่งนี้ ลองพิมพ์ `!help` เพื่อดูคำสั่งทั้งหมด')
+        await ctx.send('❓ ไม่พบคำสั่งนี้ ลองพิมพ์ `!help` เพื่อดูคำสั่งทั้งหมด')
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f'⚠️ กรุณาระบุข้อมูลให้ครบถ้วน')
+        await ctx.send('⚠️ กรุณาระบุข้อมูลให้ครบถ้วน')
+    elif isinstance(error, commands.NoPrivateMessage):
+        await ctx.send('❌ คำสั่งนี้ใช้ได้เฉพาะในเซิร์ฟเวอร์เท่านั้น')
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send('⚠️ ข้อมูลที่ระบุไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง')
     else:
-        print(f'เกิดข้อผิดพลาด: {error}')
+        print(f'[ERROR] คำสั่ง: {ctx.command} | ผู้ใช้: {ctx.author}')
+        traceback.print_exception(type(error), error, error.__traceback__)
+        await ctx.send('❌ เกิดข้อผิดพลาดที่ไม่คาดคิด กรุณาลองใหม่อีกครั้ง')
 
 # ─── เริ่มต้น Flask Server และรันบอท ──────────────────────────────────────────
 keep_alive()  # เริ่ม Flask server เพื่อให้บอทออนไลน์ตลอด 24 ชม.
