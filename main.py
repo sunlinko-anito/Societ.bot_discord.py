@@ -372,7 +372,7 @@ async def setup_systems(
     await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบสำเร็จแล้ว!", ephemeral=True)
 
 
-@app_commands.default_permissions(manage_guid=True)
+@app_commands.default_permissions(manage_guild=True)
 @bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket ลงในช่องปัจจุบัน")
 async def send_ticket_button(interaction: discord.Interaction):
     embed = discord.Embed(
