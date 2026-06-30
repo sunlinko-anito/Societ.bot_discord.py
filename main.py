@@ -277,6 +277,7 @@ async def check_meetings():
 # ------------------------------------------------------------------------------------- SLASH COMMAND ------------------------------------------------------------------------------------------
 
 
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="test_welcome", description="🧪 ทดสอบส่งการ์ดต้อนรับสมาชิกใหม่")
 async def test_welcome(interaction: discord.Interaction):
     # ป้องกันบอทขึ้นข้อความว่าตื่นสาย (Thinking...)
@@ -310,6 +311,7 @@ async def test_welcome(interaction: discord.Interaction):
         await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้องต้อนรับ กรุณาใช้ `/setup_systems` เพื่อตั้งค่าก่อน", ephemeral=True)
 
 
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ (เข้าห้องที่ตั้งค่าไว้)")
 async def test_log(interaction: discord.Interaction):
     # จำลองการส่ง Log การลบข้อความ
@@ -336,6 +338,7 @@ async def test_log(interaction: discord.Interaction):
         await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้อง Log กรุณาใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
 
 
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="setup_systems", description="ตั้งค่าห้องต่าง ๆ ของทั้ง 3 ระบบ")
 async def setup_systems(
     interaction: discord.Interaction,
@@ -368,6 +371,8 @@ async def setup_systems(
     conn.close()
     await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบสำเร็จแล้ว!", ephemeral=True)
 
+
+@app_commands.default_permissions(manage_guid=True)
 @bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket ลงในช่องปัจจุบัน")
 async def send_ticket_button(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -383,6 +388,7 @@ async def send_ticket_button(interaction: discord.Interaction):
 # ==========================================
 # 3. โซนคำสั่งสำหรับระบบนัดประชุม (Meetings)
 # ==========================================
+@app_commands.default_permissions(manage_guid=True)
 @bot.tree.command(name="meeting", description="สร้างนัดหมายการประชุมและบันทึกลงฐานข้อมูล")
 @app_commands.describe(
     topic="หัวข้อการประชุม",
@@ -463,6 +469,8 @@ async def meeting_list(interaction: discord.Interaction):
 
 
 # === สั่งลบนัดหมายด้วย ID ===
+
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="meeting_delete", description="ลบนัดหมายที่ทำผิด โดยใช้ ID")
 @app_commands.describe(db_id="เลข ID ของนัดหมายที่ต้องการลบ (ดูได้จาก /meeting_list)")
 async def meeting_delete(interaction: discord.Interaction, db_id: int):
@@ -490,6 +498,7 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
 # 4. โซนคำสั่งสำหรับระบบพนักงาน (Employees)
 # ==========================================
 # === 2. [เพิ่ม / อัปเดตข้อมูล] Slash Command: /add_employee ===
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="add_employee", description="เพิ่มข้อมูลหรือแก้ไขข้อมูลพนักงาน")
 @app_commands.describe(
     member="เลือกบัญชี Discord ของพนักงาน",
@@ -577,6 +586,7 @@ async def view_employee(interaction: discord.Interaction, member: discord.Member
 
 
 # === 5. [ลบข้อมูลพนักงาน] Slash Command: /delete_employee ===
+@app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="delete_employee", description="ลบข้อมูลพนักงานออกจากระบบ")
 @app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการลบ")
 async def delete_employee(interaction: discord.Interaction, member: discord.Member):
