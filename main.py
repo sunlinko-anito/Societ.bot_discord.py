@@ -1,4 +1,3 @@
-#test
 from ctypes import Union
 import os
 import discord
@@ -6,6 +5,7 @@ import random as rd
 import numpy as np
 import asyncio 
 import datetime
+from zoneinfo import ZoneInfo
 import sqlite3
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -235,7 +235,7 @@ class TicketCloseView(discord.ui.View):
 @tasks.loop(seconds=30)
 async def check_meetings():
     now = datetime.datetime.now()
-    now_str = now.strftime("%Y-%m-%d %H:%M")
+    now_str = now(ZoneInfo("Asia/Bangkok")).strftime("%Y-%m-%d %H:%M")
 
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -303,11 +303,11 @@ async def test_welcome(interaction: discord.Interaction):
 
             # ส่งเข้าไปในห้องที่เซ็ตไว้
             await channel.send(embed=embed)
-            await interaction.followup.send("✅ ส่งข้อความทดสอบต้อนรับไปที่ห้องแล้วครับ!", ephemeral=True)
+            await interaction.followup.send("✅ ส่งข้อความทดสอบต้อนรับไปที่ห้องแล้ว!", ephemeral=True)
         else:
             await interaction.followup.send("❌ หาห้องต้อนรับไม่เจอ (ห้องนั้นอาจถูกลบไปแล้ว)", ephemeral=True)
     else:
-        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้องต้อนรับ กรุณาใช้ `/setup_systems` เพื่อตั้งค่าก่อนครับ", ephemeral=True)
+        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้องต้อนรับ กรุณาใช้ `/setup_systems` เพื่อตั้งค่าก่อน", ephemeral=True)
 
 
 @bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ (เข้าห้องที่ตั้งค่าไว้)")
@@ -329,11 +329,11 @@ async def test_log(interaction: discord.Interaction):
             embed.add_field(name="ช่อง", value=interaction.channel.mention)
             embed.add_field(name="ข้อความที่ลบ", value="นี่คือข้อความสมมุติสำหรับทดสอบระบบ Log", inline=False)
             await log_channel.send(embed=embed)
-            await interaction.followup.send("✅ ส่ง Log ทดสอบไปที่ห้องแล้วครับ!", ephemeral=True)
+            await interaction.followup.send("✅ ส่ง Log ทดสอบไปที่ห้องแล้ว!", ephemeral=True)
         else:
             await interaction.followup.send("❌ หาห้อง Log ไม่เจอ (อาจจะลบห้องนั้นไปแล้ว)", ephemeral=True)
     else:
-        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้อง Log กรุณาใช้ `/setup_systems` ก่อนครับ", ephemeral=True)
+        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้อง Log กรุณาใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
 
 
 @bot.tree.command(name="setup_systems", description="ตั้งค่าห้องต่าง ๆ ของทั้ง 3 ระบบ")
@@ -366,13 +366,13 @@ async def setup_systems(
 
     conn.commit()
     conn.close()
-    await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบสำเร็จแล้วครับ!", ephemeral=True)
+    await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบสำเร็จแล้ว!", ephemeral=True)
 
 @bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket ลงในช่องปัจจุบัน")
 async def send_ticket_button(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📞 ศูนย์บริการช่วยเหลือสมาชิก (Support Ticket)",
-        description="หากพบปัญหาการใช้งาน, ต้องการแจ้งรีพอร์ตผู้เล่น หรือติดต่อสอบถามทีมงานแอดมิน\nกรุณากดปุ่มด้านล่างนี้เพื่อเปิดห้องแชทคุยตัวต่อตัวแบบส่วนตัวครับ",
+        description="หากพบปัญหาการใช้งาน, ต้องการแจ้งรีพอร์ตผู้เล่น หรือติดต่อสอบถามทีมงานแอดมิน\nกรุณากดปุ่มด้านล่างนี้เพื่อเปิดห้องแชทคุยตัวต่อตัวแบบส่วนตัว",
         color=discord.Color.gold()
     )
     # ส่งปุ่มควบคุมไปวาง
@@ -401,7 +401,7 @@ async def meeting(
 ):
     try:
         input_time = datetime.datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M")
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(ZoneInfo("Asia/Bangkok")).replace(tzinfo=None)
 
         if input_time <= now:
             await interaction.response.send_message("❌ ไม่สามารถนัดหมายเวลาในอดีตได้ครับ กรุณาระบุเวลาใหม่", ephemeral=True)
@@ -448,7 +448,7 @@ async def meeting_list(interaction: discord.Interaction):
     conn.close()
 
     if not rows:
-        await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", ephemeral=True)
+        await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", อัปเดตการตั้งค่าระบบสำเร็จแล้วคตั้งค่าระบบสำเร็จแล้วครับ=True)
         return
 
     embed = discord.Embed(title="📋 รายการนัดหมายทั้งหมด", color=discord.Color.orange())
