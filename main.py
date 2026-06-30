@@ -51,7 +51,6 @@ def init_db():
            position TEXT,
            mbti TEXT
         )
-
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -80,19 +79,21 @@ def init_db():
 async def on_ready():
     init_db()
     print("=================================")
-    print(f"     Logged in as {bot.user.name}")
+    print(f"                               Logged in as {bot.user.name}")
     print("=================================")
 
     if not check_meetings.is_running():
         check_meetings.start()
 
+    # [แก้ไขจุดที่ 2] ลงทะเบียน Views ทั้งสองแบบเพื่อให้ปุ่มยังคงทำงานได้หลังจากเปิดบอทใหม่
     bot.add_view(TicketPersistentView())
+    bot.add_view(TicketCloseView())
 
     try:
         GUILD_ID = discord.Object(id=1497527309413122089) 
 
         bot.tree.copy_global_to(guild=GUILD_ID)
-        synced = await bot.tree.sync()
+        synced = await bot.tree.sync(guild=GUILD_ID)
         print(f"Synced {len(synced)} command(s)")
     except Exception as e:
         print(e)
@@ -174,14 +175,13 @@ async def on_voice_state_update(member, before, after):
 class TicketPersistentView(discord.ui.View):
     """สร้างปุ่มเปิดตั๋วถาวร"""
     def __init__(self):
-        super().__init__(timeout=None) # timeout=None สำคัญมากเพื่อให้ปุ่มทำงานตลอดไป
+        super().__init__(timeout=None) 
 
     @discord.ui.button(label="📩 เปิด Ticket แจ้งปัญหา", style=discord.ButtonStyle.primary, custom_id="press_open_ticket")
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         user = interaction.user
 
-        # ป้องกันไม่ให้เปิดตั๋วซ้ำซ้อน
         await interaction.response.defer(ephemeral=True)
 
         # ตั้งสิทธิ์ห้องแชทลับ (แอดมินเห็น, คนเปิดเห็น, คนอื่นห้ามเห็น)
@@ -235,7 +235,8 @@ class TicketCloseView(discord.ui.View):
 @tasks.loop(seconds=30)
 async def check_meetings():
     now = datetime.datetime.now()
-    now_str = now(ZoneInfo("Asia/Bangkok")).strftime("%Y-%m-%d %H:%M")
+    now_tz = now.astimezone(ZoneInfo("Asia/Bangkok"))
+    now_str = now_tz.strftime("%Y-%m-%d %H:%M")
 
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -259,8 +260,8 @@ async def check_meetings():
                 timestamp=datetime.datetime.now()
             )
 
-            # ทำการแท็ก Role หรือ Member ที่เกี่ยวข้อง 
-            mention_text = f"<@&{mention_id}>" if bot.get_guild(channel.guild.id).get_role(mention_id) else f"<@{mention_id}>"
+            # [แก้ไขจุดที่ 3] ดึงข้อมูล Role จากกิลด์ของแชนแนลโดยตรง ป้องกันข้อผิดพลาดในเคสที่บอทยังโหลดข้อมูลกิลด์สากลไม่เสร็จ
+            mention_text = f"<@&{mention_id}>" if channel.guild.get_role(mention_id) else f"<@{mention_id}>"
 
             try:
                 await channel.send(content=mention_text, embed=alert_embed)
@@ -280,10 +281,8 @@ async def check_meetings():
 @app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="test_welcome", description="🧪 ทดสอบส่งการ์ดต้อนรับสมาชิกใหม่")
 async def test_welcome(interaction: discord.Interaction):
-    # ป้องกันบอทขึ้นข้อความว่าตื่นสาย (Thinking...)
     await interaction.response.defer(ephemeral=True)
 
-    # เชื่อมต่อเพื่อดูว่าคุณเซ็ตห้องต้อนรับไว้ที่ไอดีไหน
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
@@ -291,10 +290,8 @@ async def test_welcome(interaction: discord.Interaction):
     conn.close()
 
     if row and row[0]:
-        # ดึงห้องพิมพ์ข้อความจากไอดีที่บันทึกไว้
         channel = interaction.guild.get_channel(row[0])
         if channel:
-            # สร้างการ์ด Embed ทดสอบดึงชื่อและรูปโปรไฟล์ของคุณมาโชว์
             embed = discord.Embed(
                 title="🎉 [TEST] ยินดีต้อนรับ! 🎉", 
                 description=f"ยินดีต้อนรับ {interaction.user.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!", 
@@ -302,7 +299,6 @@ async def test_welcome(interaction: discord.Interaction):
             )
             embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
-            # ส่งเข้าไปในห้องที่เซ็ตไว้
             await channel.send(embed=embed)
             await interaction.followup.send("✅ ส่งข้อความทดสอบต้อนรับไปที่ห้องแล้ว!", ephemeral=True)
         else:
@@ -314,7 +310,6 @@ async def test_welcome(interaction: discord.Interaction):
 @app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ (เข้าห้องที่ตั้งค่าไว้)")
 async def test_log(interaction: discord.Interaction):
-    # จำลองการส่ง Log การลบข้อความ
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_NAME)
@@ -351,13 +346,11 @@ async def setup_systems(
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # เช็คว่าเคยมีประวัติเซ็ตค่าหรือยัง
     cursor.execute("SELECT guild_id FROM settings WHERE guild_id = ?", (guild_id,))
     if not cursor.fetchone():
         cursor.execute("INSERT INTO settings (guild_id) VALUES (?)", (guild_id,))
         conn.commit()
 
-    # อัปเดตข้อมูลตามที่ผู้ใช้กรอกตัวเลือกเข้ามา
     if welcome_channel:
         cursor.execute("UPDATE settings SET welcome_channel_id = ? WHERE guild_id = ?", (welcome_channel.id, guild_id))
     if log_channel:
@@ -380,15 +373,11 @@ async def send_ticket_button(interaction: discord.Interaction):
         description="หากพบปัญหาการใช้งาน, ต้องการแจ้งรีพอร์ตผู้เล่น หรือติดต่อสอบถามทีมงานแอดมิน\nกรุณากดปุ่มด้านล่างนี้เพื่อเปิดห้องแชทคุยตัวต่อตัวแบบส่วนตัว",
         color=discord.Color.gold()
     )
-    # ส่งปุ่มควบคุมไปวาง
     await interaction.response.send_message("ส่งแผงควบคุมสำเร็จ", ephemeral=True)
     await interaction.channel.send(embed=embed, view=TicketPersistentView())
 
 
-# ==========================================
-# 3. โซนคำสั่งสำหรับระบบนัดประชุม (Meetings)
-# ==========================================
-@app_commands.default_permissions(manage_guid=True)
+@app_commands.default_permissions(manage_guild=True)
 @bot.tree.command(name="meeting", description="สร้างนัดหมายการประชุมและบันทึกลงฐานข้อมูล")
 @app_commands.describe(
     topic="หัวข้อการประชุม",
@@ -444,7 +433,6 @@ async def meeting(
         )
 
 
-# === สั่งดูรายการนัดหมายทั้งหมดที่ยังมาไม่ถึง ===
 @bot.tree.command(name="meeting_list", description="ดูรายการนัดหมายประชุมทั้งหมด")
 async def meeting_list(interaction: discord.Interaction):
     conn = sqlite3.connect(DB_NAME)
@@ -454,7 +442,7 @@ async def meeting_list(interaction: discord.Interaction):
     conn.close()
 
     if not rows:
-        await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", อัปเดตการตั้งค่าระบบสำเร็จแล้วคตั้งค่าระบบสำเร็จแล้วครับ=True)
+        await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", ephemeral=True)
         return
 
     embed = discord.Embed(title="📋 รายการนัดหมายทั้งหมด", color=discord.Color.orange())
@@ -468,8 +456,6 @@ async def meeting_list(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-# === สั่งลบนัดหมายด้วย ID ===
-
 @app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="meeting_delete", description="ลบนัดหมายที่ทำผิด โดยใช้ ID")
 @app_commands.describe(db_id="เลข ID ของนัดหมายที่ต้องการลบ (ดูได้จาก /meeting_list)")
@@ -477,7 +463,6 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # เช็คก่อนว่ามี ID นี้ไหม
     cursor.execute("SELECT topic FROM schedules WHERE id = ? AND is_done = 0", (db_id,))
     row = cursor.fetchone()
 
@@ -486,7 +471,6 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
         conn.close()
         return
 
-    # สั่งลบ (เปลี่ยนสถานะเป็น 1 หรือลบแถวนั้นออกไปเลย ในที่นี้ขอลบออกเลยเพื่อความสะอาด)
     cursor.execute("DELETE FROM schedules WHERE id = ?", (db_id,))
     conn.commit()
     conn.close()
@@ -494,10 +478,6 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
 
 
-# ==========================================
-# 4. โซนคำสั่งสำหรับระบบพนักงาน (Employees)
-# ==========================================
-# === 2. [เพิ่ม / อัปเดตข้อมูล] Slash Command: /add_employee ===
 @app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="add_employee", description="เพิ่มข้อมูลหรือแก้ไขข้อมูลพนักงาน")
 @app_commands.describe(
@@ -528,7 +508,7 @@ async def add_employee(
 
     embed = discord.Embed(title="✨ บันทึกข้อมูลพนักงานสำเร็จ", color=discord.Color.green())
     embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
-    embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True) # เปลี่ยนเป็น 👤 เรียบร้อยครับ
+    embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
     embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
     embed.add_field(name="🧠 MBTI", value=mbti.upper(), inline=True)
     embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
@@ -536,7 +516,6 @@ async def add_employee(
     await interaction.response.send_message(embed=embed)
 
 
-# === 3. [ดูรายชื่อพนักงานทั้งหมด] Slash Command: /list_employees ===
 @bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
 async def list_employees(interaction: discord.Interaction):
     conn = sqlite3.connect(DB_NAME)
@@ -562,7 +541,6 @@ async def list_employees(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-# === 4. [ดูข้อมูลรายบุคคล] Slash Command: /view_employee ===
 @bot.tree.command(name="view_employee", description="ดูข้อมูลพนักงานเฉพาะบุคคล")
 @app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการดูข้อมูล")
 async def view_employee(interaction: discord.Interaction, member: discord.Member):
@@ -576,7 +554,7 @@ async def view_employee(interaction: discord.Interaction, member: discord.Member
         emp_id, nickname, position, mbti = row
         embed = discord.Embed(title=f"🔎 ข้อมูลพนักงาน: {nickname}", color=discord.Color.blue())
         embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
-        embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True) # เปลี่ยนเป็น 👤 เรียบร้อยครับ
+        embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
         embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
         embed.add_field(name="🧠 MBTI", value=mbti, inline=True)
         embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
@@ -585,7 +563,6 @@ async def view_employee(interaction: discord.Interaction, member: discord.Member
         await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานของ {member.mention} ในระบบ", ephemeral=True)
 
 
-# === 5. [ลบข้อมูลพนักงาน] Slash Command: /delete_employee ===
 @app_commands.default_permissions(administrator=True)
 @bot.tree.command(name="delete_employee", description="ลบข้อมูลพนักงานออกจากระบบ")
 @app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการลบ")
@@ -608,9 +585,6 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
         await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
 
 
-# ==========================================
-# 5. ระบบข้าม Error หน้าจอดำเวลามีการพิมพ์ผิด
-# ==========================================
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -624,7 +598,7 @@ async def hello(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message("An error occurred.", ephemeral=True)
         print(f"Slash command error: {e}")
-1
+
 
 @bot.tree.command(name="test", description="test command!")
 async def test(interaction: discord.Interaction):
@@ -642,21 +616,19 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel, m
     await interaction.response.send_message(f"mention {member.display_name} to {channel.mention} completed successfully", ephemeral=True)
 
 
-# ----- PREFIX COMMAND -----
-""" @bot.command(name="ping")
-async def ping(ctx):
-    try:
-        await ctx.send(f"Pong! Latency: {round(bot.latency * 1000)} ms")
-    except Exception as e:
-        await ctx.send("An error occurred when processing the command.")
-        print(f"Prefix command error: {e}") """
-
-
-# ----- MAIN ENTRY -----
-try:
+# [แก้ไขจุดที่ 1] สร้างฟังก์ชันหลักในการรันโปรแกรม เพื่อแก้ปัญหาระบบหลับหรือขึ้น Offline
+async def main():
+    # เรียกเปิดเว็บเซิร์ฟเวอร์ Flask ไว้ล่วงหน้า
     keep_alive()
-    bot.run(TOKEN)
-except discord.LoginFailure:
-    print("Invalid bot token. Check your DISCORD_TOKEN environment variable.")
-except Exception as e:
-    print(f"Unexpected error: {e}")
+
+    # สั่งให้บอทเริ่มการเชื่อมต่อเข้าเซิร์ฟเวอร์ Discord แบบ Asynchronous
+    async with bot:
+        await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except discord.LoginFailure:
+        print("Invalid bot token. Check your DISCORD_TOKEN environment variable.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
