@@ -89,13 +89,14 @@ async def on_ready():
     bot.add_view(TicketPersistentView())
     bot.add_view(TicketCloseView())
 
+    bot.add_view(TicketCloseView())
+
     try:
-        GUILD_ID = discord.Object(id=1497527309413122089) 
-        
-        synced = await bot.tree.sync(guild=GUILD_ID)
+        synced = await bot.tree.sync() 
         print(f"Synced {len(synced)} command(s)")
     except Exception as e:
         print(e)
+
 
 
 @bot.event
