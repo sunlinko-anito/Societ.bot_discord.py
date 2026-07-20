@@ -540,7 +540,7 @@ async def list_employees(interaction: discord.Interaction):
     for row in rows:
         discord_id, emp_id, nickname, position, mbti = row
         embed.add_field(
-            name=f"⭐ [{emp_id}] คุณ {nickname}",
+            name=f"⭐ [{emp_id}] {nickname}",
             value=f"**ตำแหน่ง:** {position} | **MBTI:** {mbti}\n**บัญชี Discord:** <@{discord_id}>",
             inline=False
         )
