@@ -646,7 +646,7 @@ async def rd_employee(interaction: discord.Interaction, channel: discord.TextCha
     embed = discord.Embed(
         title=f"🎲 ผลการสุ่มพนักงาน ({filter_text})",
         description=f"สุ่มได้ <@{discord_id}> (ชื่อเล่น: **{nickname}** | ตำแหน่ง: **{emp_position}**)",
-        color=discord.Color.random()
+        color=discord.Color.red()
     )
     await channel.send(content=f"🎉 <@{discord_id}>", embed=embed)
     await interaction.response.send_message(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้ว", ephemeral=True)
