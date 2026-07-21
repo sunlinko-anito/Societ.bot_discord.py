@@ -1,4 +1,3 @@
-from ctypes import Union
 import os
 import discord
 import random as rd
@@ -332,7 +331,7 @@ async def test_log(interaction: discord.Interaction):
         else:
             await interaction.followup.send("❌ หาห้อง Log ไม่เจอ (อาจจะลบห้องนั้นไปแล้ว)", ephemeral=True)
     else:
-        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้อง Log กรุณาใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
+        await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าห้อง Log ใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
 
 
 @app_commands.default_permissions(administrator=True)
@@ -365,16 +364,16 @@ async def setup_systems(
 
     conn.commit()
     conn.close()
-    await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบสำเร็จแล้ว!", ephemeral=True)
+    await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบแล้ว!", ephemeral=True)
 
 
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
-@bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket ลงในช่องปัจจุบัน")
+@bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket")
 async def send_ticket_button(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📞 ศูนย์บริการช่วยเหลือสมาชิก (Support Ticket)",
-        description="หากพบปัญหาการใช้งาน, ต้องการแจ้งรีพอร์ตผู้เล่น หรือติดต่อสอบถามทีมงานแอดมิน\nกรุณากดปุ่มด้านล่างนี้เพื่อเปิดห้องแชทคุยตัวต่อตัวแบบส่วนตัว",
+        title="📞 Support Ticket",
+        description="แจ้งปัญหากับ director หรือถามเกี่ยวกับงานของตัวเอง",
         color=discord.Color.gold()
     )
     await interaction.response.send_message("ส่งแผงควบคุมสำเร็จ", ephemeral=True)
@@ -389,7 +388,7 @@ async def send_ticket_button(interaction: discord.Interaction):
     date_str="วันที่ประชุม (รูปแบบ วว/ดด/ปปปป เช่น 25/06/2026)",
     time_str="เวลาประชุม (รูปแบบ ชช:นน เช่น 14:30)",
     channel="ช่องที่ต้องการให้ส่งข้อความแจ้งเตือน",
-    mention_target="บทบาท (Role) หรือผู้ใช้ที่จะแท็กตามตัวเพื่อเรียกประชุม"
+    mention_target="บทบาท (Role) หรือผู้ใช้ที่จะแท็กเข้าประชุม"
 )
 async def meeting(
     interaction: discord.Interaction, 
@@ -492,7 +491,7 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     emp_id="รหัสพนักงาน",
     nickname="ชื่อเล่น",
     position="ตำแหน่งหน้าที่",
-    mbti="MBTI (เช่น INTJ, ENFP)"
+    mbti="MBTI (เช่น INTJ, ENTJ)"
 )
 async def add_employee(
     interaction: discord.Interaction,
@@ -586,7 +585,7 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message(f"🗑️ ลบข้อมูลของ คุณ **{nickname}** ({member.mention}) ออกจากระบบเรียบร้อยแล้ว")
+        await interaction.response.send_message(f"🗑️ ลบข้อมูลของ **{nickname}** ({member.mention}) ออกจากระบบแล้ว")
     else:
         conn.close()
         await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
@@ -622,7 +621,38 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel, m
     await channel.send(f"get back to work and submit your work too. {member.mention}!")
     await interaction.response.send_message(f"mention {member.display_name} to {channel.mention} completed successfully", ephemeral=True)
 
+@bot.tree.command(name="rd_employee", description="🎲 สุ่มพนักงาน")
+@app_commands.describe(
+    channel="เลือกห้องที่ต้องการส่งข้อความแจ้งเตือน",
+    position="ระบุตำแหน่งที่ต้องการสุ่ม (หากไม่ใส่ จะเป็นการสุ่มทุกคน)"
+)
+async def rd_employee(interaction: discord.Interaction, channel: discord.TextChannel, position: str = None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    if position:
+        cursor.execute("SELECT discord_id, nickname, position FROM employees WHERE position LIKE ?", (f"%{position}%",))
+        filter_text = f"ตำแหน่ง: {position}"
+    else:
+        cursor.execute("SELECT discord_id, nickname, position FROM employees")
+        filter_text = "พนักงานทุกคน"
+    employees = cursor.fetchall()
+    conn.close()
+    if not employees:
+        msg = f"❌ ไม่พบพนักงานในตำแหน่ง **{position}**" if position else "❌ ไม่พบข้อมูลพนักงานในระบบ"
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+    selected_emp = rd.choice(employees)
+    discord_id, nickname, emp_position = selected_emp
+    embed = discord.Embed(
+        title=f"🎲 ผลการสุ่มพนักงาน ({filter_text})",
+        description=f"สุ่มได้ <@{discord_id}> (ชื่อเล่น: **{nickname}** | ตำแหน่ง: **{emp_position}**)",
+        color=discord.Color.random()
+    )
+    await channel.send(content=f"🎉 <@{discord_id}>", embed=embed)
+    await interaction.response.send_message(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้ว", ephemeral=True)
+    
 
+# ------------------------------------------------------------------------------------- MAIN ------------------------------------------------------------------------------------------
 async def main():
     keep_alive()
     async with bot:
