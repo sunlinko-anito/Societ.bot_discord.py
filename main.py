@@ -621,35 +621,55 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel, m
     await channel.send(f"get back to work and submit your work too. {member.mention}!")
     await interaction.response.send_message(f"mention {member.display_name} to {channel.mention} completed successfully", ephemeral=True)
 
-@bot.tree.command(name="rd_employee", description="🎲 สุ่มพนักงาน")
-@app_commands.describe(
-    channel="เลือกห้องที่ต้องการส่งข้อความแจ้งเตือน",
-    position="ระบุตำแหน่งที่ต้องการสุ่ม (หากไม่ใส่ จะเป็นการสุ่มทุกคน)"
-)
-async def rd_employee(interaction: discord.Interaction, channel: discord.TextChannel, position: str = None):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    if position:
-        cursor.execute("SELECT discord_id, nickname, position FROM employees WHERE position LIKE ?", (f"%{position}%",))
-        filter_text = f"ตำแหน่ง: {position}"
-    else:
-        cursor.execute("SELECT discord_id, nickname, position FROM employees")
-        filter_text = "พนักงานทุกคน"
-    employees = cursor.fetchall()
-    conn.close()
-    if not employees:
-        msg = f"❌ ไม่พบพนักงานในตำแหน่ง **{position}**" if position else "❌ ไม่พบข้อมูลพนักงานในระบบ"
-        await interaction.response.send_message(msg, ephemeral=True)
-        return
-    selected_emp = rd.choice(employees)
-    discord_id, nickname, emp_position = selected_emp
-    embed = discord.Embed(
-        title=f"🎲 ผลการสุ่มพนักงาน ({filter_text})",
-        description=f"สุ่มได้ <@{discord_id}> (ชื่อเล่น: **{nickname}** | ตำแหน่ง: **{emp_position}**)",
-        color=discord.Color.red()
+    @bot.tree.command(name="rd_employee", description="🎲 สุ่มพนักงาน (ไม่ใส่ตำแหน่ง = สุ่มทุกคน)")
+    @app_commands.describe(
+        channel="เลือกห้องที่ต้องการส่งข้อความแจ้งเตือน",
+        position="ระบุตำแหน่งที่ต้องการสุ่ม (หากไม่ใส่ จะเป็นการสุ่มทุกคน)"
     )
-    await channel.send(content=f"🎉 <@{discord_id}>", embed=embed)
-    await interaction.response.send_message(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้ว", ephemeral=True)
+    async def rd_employee(interaction: discord.Interaction, channel: discord.TextChannel, position: str = None):
+        # 1. เลื่อนตอบรับระบบ Discord ไว้ก่อนเพื่อป้องกันบอทตอบช้า/ค้าง
+        await interaction.response.defer(ephemeral=True)
+
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        # 2. เช็คว่าผู้ใช้ใส่ตำแหน่งมาหรือไม่
+        if position and position.strip() != "" and position.strip().lower() != "none":
+            clean_pos = position.strip()
+            cursor.execute(
+                "SELECT discord_id, nickname, position FROM employees WHERE LOWER(position) LIKE LOWER(?)", 
+                (f"%{clean_pos}%",)
+            )
+            filter_text = f"ตำแหน่ง: {clean_pos}"
+        else:
+            cursor.execute("SELECT discord_id, nickname, position FROM employees")
+            filter_text = "พนักงานทุกคน"
+
+        employees = cursor.fetchall()
+        conn.close()
+
+        # 3. ถ้าไม่มีพนักงานในระบบ/ตำแหน่งนั้น ให้แจ้งเตือนแล้วจบการทำงานทันที (return)
+        if not employees:
+            if position and position.strip() != "" and position.strip().lower() != "none":
+                await interaction.followup.send(f"❌ ไม่พบพนักงานในตำแหน่ง **{position}** ครับ", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ ไม่พบข้อมูลพนักงานในระบบ กรุณาใช้ `/add_employee` ก่อนครับ", ephemeral=True)
+            return
+
+        # 4. ถ้ามีข้อมูล ให้สุ่มพนักงาน 1 คน
+        selected_emp = rd.choice(employees)
+        discord_id, nickname, emp_position = selected_emp
+
+        # 5. ส่งการ์ด Embed เข้าช่องที่เลือก
+        embed = discord.Embed(
+            title=f"🎲 ผลการสุ่มพนักงาน ({filter_text})",
+            description=f"สุ่มได้ <@{discord_id}> (ชื่อเล่น: **{nickname}** | ตำแหน่ง: **{emp_position}**)",
+            color=discord.Color.random()
+        )
+        await channel.send(content=f"🎉 <@{discord_id}>", embed=embed)
+
+        # 6. ตอบกลับคนกดคำสั่งสุ่มแค่ครั้งเดียวจบ!
+        await interaction.followup.send(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้วครับ", ephemeral=True)
     
 
 # ------------------------------------------------------------------------------------- MAIN ------------------------------------------------------------------------------------------
