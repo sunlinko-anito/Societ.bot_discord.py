@@ -651,9 +651,9 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel, m
         # 3. ถ้าไม่มีพนักงานในระบบ/ตำแหน่งนั้น ให้แจ้งเตือนแล้วจบการทำงานทันที (return)
         if not employees:
             if position and position.strip() != "" and position.strip().lower() != "none":
-                await interaction.followup.send(f"❌ ไม่พบพนักงานในตำแหน่ง **{position}** ครับ", ephemeral=True)
+                await interaction.followup.send(f"❌ ไม่พบพนักงานในตำแหน่ง **{position}** ", ephemeral=True)
             else:
-                await interaction.followup.send("❌ ไม่พบข้อมูลพนักงานในระบบ กรุณาใช้ `/add_employee` ก่อนครับ", ephemeral=True)
+                await interaction.followup.send("❌ ไม่พบข้อมูลพนักงานในระบบ กรุณาใช้ `/add_employee` ก่อน", ephemeral=True)
             return
 
         # 4. ถ้ามีข้อมูล ให้สุ่มพนักงาน 1 คน
@@ -669,7 +669,7 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel, m
         await channel.send(content=f"🎉 <@{discord_id}>", embed=embed)
 
         # 6. ตอบกลับคนกดคำสั่งสุ่มแค่ครั้งเดียวจบ!
-        await interaction.followup.send(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้วครับ", ephemeral=True)
+        await interaction.followup.send(f"✅ สุ่มพนักงาน ({filter_text}) เรียบร้อยแล้ว! ส่งผลไปยัง {channel.mention} แล้ว", ephemeral=True)
     
 
 # ------------------------------------------------------------------------------------- MAIN ------------------------------------------------------------------------------------------
