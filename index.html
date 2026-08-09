@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Societ — Game Studio</title>
+<link rel="icon" href="assets/IMG_20260719_104125.png" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          void: '#0b0520',
+          cosmic: '#081738',
+          emeraldDeep: '#0f3d1f',
+          slateLight: '#f1f5f9',
+          slateMuted: '#cbd5e1',
+          cyanSoft: '#38bdf8',
+          emeraldSoft: '#34d399'
+        },
+        fontFamily: {
+          body: ['Inter', 'system-ui', 'sans-serif'],
+          display: ['Rajdhani', 'Inter', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+<style>
+  :root {
+    --void: #0b0520;
+    --cosmic: #081738;
+    --emerald-deep: #0f3d1f;
+    --cyan-soft: #38bdf8;
+    --emerald-soft: #34d399;
+  }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #f1f5f9;
+    background: linear-gradient(140deg, var(--void) 0%, var(--cosmic) 52%, var(--emerald-deep) 100%);
+    background-attachment: fixed;
+  }
+  h1, h2, h3, .font-display { font-family: 'Rajdhani', 'Inter', sans-serif; letter-spacing: .02em; }
+
+  #wallpaper {
+    position: fixed; inset: 0; z-index: -3;
+    background-image: url('assets/IMG_3555.jpg');
+    background-size: cover; background-position: center; background-attachment: fixed;
+    opacity: .28; filter: saturate(1.1);
+  }
+  #wallpaper-tint {
+    position: fixed; inset: 0; z-index: -2;
+    background: linear-gradient(140deg, rgba(11,5,32,.92) 0%, rgba(8,23,56,.86) 52%, rgba(15,61,31,.9) 100%);
+  }
+  #vfx { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+
+  @keyframes pulseGlowSoft {
+    0%, 100% { filter: drop-shadow(0 0 4px rgba(56,189,248,.45)) drop-shadow(0 0 10px rgba(52,211,153,.25)); transform: scale(1); }
+    50%      { filter: drop-shadow(0 0 12px rgba(56,189,248,.85)) drop-shadow(0 0 22px rgba(52,211,153,.55)); transform: scale(1.04); }
+  }
+  .pulse-glow-soft { animation: pulseGlowSoft 3.4s ease-in-out infinite; }
+
+  .gradient-text {
+    background: linear-gradient(92deg, #38bdf8 0%, #a5f3fc 45%, #34d399 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .glass {
+    background: rgba(8, 23, 56, .45);
+    border: 1px solid rgba(56, 189, 248, .18);
+    backdrop-filter: blur(10px);
+  }
+  .glass:hover { border-color: rgba(52, 211, 153, .38); }
+  .glow-btn { box-shadow: 0 0 18px rgba(56,189,248,.28); }
+  .glow-btn:hover { box-shadow: 0 0 28px rgba(52,211,153,.45); }
+  .accordion-body { max-height: 0; overflow: hidden; transition: max-height .38s ease; }
+  .accordion-body.open { max-height: 520px; }
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-track { background: #0b0520; }
+  ::-webkit-scrollbar-thumb { background: linear-gradient(#38bdf8, #34d399); border-radius: 9px; }
+</style>
+</head>
+
+<body class="min-h-screen font-body antialiased">
+<div id="wallpaper"></div>
+<div id="wallpaper-tint"></div>
+<canvas id="vfx"></canvas>
+
+<!-- ============================== NAVBAR ============================== -->
+<header class="fixed top-0 inset-x-0 z-40 glass border-b border-cyanSoft/20">
+  <nav class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+    <a href="#origins" class="flex items-center gap-3 shrink-0">
+      <img src="assets/IMG_20260719_104125.png" alt="Societ logo"
+           class="h-10 w-10 rounded-full object-cover pulse-glow-soft" />
+      <span class="font-display text-2xl font-bold gradient-text">SOCIET</span>
+    </a>
+
+    <div class="hidden md:flex items-center gap-7 font-display text-lg text-slateMuted">
+      <a href="#origins" class="hover:text-cyanSoft transition">Origins</a>
+      <a href="#operatives" class="hover:text-cyanSoft transition">Operatives</a>
+      <a href="#archives" class="hover:text-cyanSoft transition">Archives</a>
+      <a href="#store" data-auth-only class="hidden hover:text-emeraldSoft transition">Store</a>
+      <a href="#admin" data-admin-only class="hidden hover:text-emeraldSoft transition">Admin</a>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <a id="login-btn" href="/auth/login"
+         class="glow-btn inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
+                bg-gradient-to-r from-cyanSoft to-emeraldSoft text-void hover:opacity-95 transition">
+        <svg viewBox="0 0 127 96" class="h-4 w-4 fill-current"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg>
+        Login with Discord
+      </a>
+      <div id="user-chip" class="hidden items-center gap-3">
+        <img id="user-avatar" alt="" class="h-9 w-9 rounded-full ring-2 ring-cyanSoft/50" />
+        <div class="hidden sm:block leading-tight">
+          <p id="user-name" class="text-sm font-semibold text-slateLight"></p>
+          <p id="user-role" class="text-[11px] uppercase tracking-widest text-emeraldSoft"></p>
+        </div>
+        <button id="logout-btn" class="text-xs text-slateMuted hover:text-cyanSoft transition">Logout</button>
+      </div>
+    </div>
+  </nav>
+</header>
+
+<!-- ============================== HERO ============================== -->
+<section id="origins" class="relative min-h-screen flex items-center justify-center px-6 pt-24 pb-16">
+  <div class="max-w-3xl text-center">
+    <p class="font-display tracking-[0.45em] text-sm text-cyanSoft/80 mb-5">GAME STUDIO · EST. IN THE VOID</p>
+    <h1 class="font-display text-6xl sm:text-8xl font-bold gradient-text mb-6">SOCIET</h1>
+    <p class="text-lg sm:text-xl text-slateMuted leading-relaxed mb-10">
+      We build worlds out of starlight and code — a small constellation of operatives
+      crafting games that feel like the space between galaxies.
+    </p>
+    <div class="flex flex-wrap justify-center gap-4">
+      <a href="#archives"
+         class="glow-btn rounded-lg px-6 py-3 font-display text-lg font-semibold bg-gradient-to-r from-cyanSoft to-emeraldSoft text-void">
+        Explore the Archives
+      </a>
+      <a href="#operatives"
+         class="rounded-lg px-6 py-3 font-display text-lg font-semibold border border-cyanSoft/40 text-slateLight hover:border-emeraldSoft/60 transition">
+        Meet the Operatives
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== OPERATIVES ============================== -->
+<section id="operatives" class="max-w-5xl mx-auto px-6 py-24">
+  <h2 class="font-display text-4xl sm:text-5xl font-bold gradient-text mb-3">Operatives Roster</h2>
+  <p class="text-slateMuted mb-10">The crew behind every pixel and packet.</p>
+  <div id="roster" class="space-y-3"></div>
+  <p id="roster-empty" class="hidden text-slateMuted italic">No operatives registered yet.</p>
+</section>
+
+<!-- ============================== ARCHIVES ============================== -->
+<section id="archives" class="max-w-6xl mx-auto px-6 py-24">
+  <h2 class="font-display text-4xl sm:text-5xl font-bold gradient-text mb-3">Project Archives</h2>
+  <p class="text-slateMuted mb-10">Everything we have shipped, prototyped, or are still dreaming up.</p>
+  <div id="games-grid" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3"></div>
+  <p id="games-empty" class="hidden text-slateMuted italic">No projects published yet.</p>
+</section>
+
+<!-- ============================== STORE / DASHBOARD ============================== -->
+<section id="store" data-auth-only class="hidden max-w-6xl mx-auto px-6 py-24">
+  <div class="flex flex-wrap items-end justify-between gap-6 mb-10">
+    <div>
+      <h2 class="font-display text-4xl sm:text-5xl font-bold gradient-text mb-3">Employee Store</h2>
+      <p class="text-slateMuted">Convert your effort into rewards.</p>
+    </div>
+    <div class="glass rounded-xl px-6 py-4 text-right">
+      <p class="text-xs uppercase tracking-widest text-slateMuted">Points balance</p>
+      <p id="points-balance" class="font-display text-4xl font-bold text-emeraldSoft">0</p>
+      <button id="edit-profile-btn" class="mt-1 text-xs text-cyanSoft hover:underline">Edit my profile</button>
+    </div>
+  </div>
+  <div id="store-grid" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3"></div>
+  <p id="store-empty" class="hidden text-slateMuted italic">The store is empty right now.</p>
+
+  <h3 class="font-display text-2xl font-semibold text-slateLight mt-14 mb-4">My redemptions</h3>
+  <div id="my-transactions" class="glass rounded-xl divide-y divide-cyanSoft/10 text-sm"></div>
+</section>
+
+<!-- ============================== ADMIN ============================== -->
+<section id="admin" data-admin-only class="hidden max-w-6xl mx-auto px-6 py-24">
+  <h2 class="font-display text-4xl sm:text-5xl font-bold gradient-text mb-3">Admin Console</h2>
+  <p class="text-slateMuted mb-10">Full control over staff, portfolio, store and points.</p>
+
+  <div class="grid gap-8 lg:grid-cols-2">
+    <!-- Employees -->
+    <div class="glass rounded-xl p-6">
+      <h3 class="font-display text-2xl font-semibold text-cyanSoft mb-4">Operatives</h3>
+      <form id="admin-employee-form" class="space-y-3 text-sm">
+        <input name="discord_id" placeholder="Discord ID" required class="admin-input" />
+        <input name="nickname" placeholder="Nickname" required class="admin-input" />
+        <input name="position" placeholder="Position" required class="admin-input" />
+        <input name="contact_email" type="email" placeholder="Contact email" class="admin-input" />
+        <textarea name="bio" rows="2" placeholder="Bio" class="admin-input"></textarea>
+        <div class="flex items-center gap-3">
+          <input name="points" type="number" value="0" placeholder="Points" class="admin-input" />
+          <label class="flex items-center gap-2 text-slateMuted whitespace-nowrap">
+            <input name="is_admin" type="checkbox" class="accent-emeraldSoft" /> Admin
+          </label>
+        </div>
+        <button class="admin-submit">Save operative</button>
+      </form>
+      <div id="admin-employee-list" class="mt-5 space-y-2 text-sm"></div>
+    </div>
+
+    <!-- Games -->
+    <div class="glass rounded-xl p-6">
+      <h3 class="font-display text-2xl font-semibold text-cyanSoft mb-4">Projects</h3>
+      <form id="admin-game-form" class="space-y-3 text-sm">
+        <input name="id" type="hidden" />
+        <input name="title" placeholder="Title" required class="admin-input" />
+        <textarea name="description" rows="2" placeholder="Description" class="admin-input"></textarea>
+        <select name="status" class="admin-input">
+          <option>IN DEVELOPMENT</option><option>RELEASED</option><option>PROTOTYPE</option>
+        </select>
+        <input name="platforms" placeholder="Platforms (PC, Switch…)" class="admin-input" />
+        <input name="image_url" placeholder="Cover image URL" class="admin-input" />
+        <button class="admin-submit">Save project</button>
+      </form>
+      <div id="admin-game-list" class="mt-5 space-y-2 text-sm"></div>
+    </div>
+
+    <!-- Store items -->
+    <div class="glass rounded-xl p-6">
+      <h3 class="font-display text-2xl font-semibold text-cyanSoft mb-4">Store items</h3>
+      <form id="admin-item-form" class="space-y-3 text-sm">
+        <input name="id" type="hidden" />
+        <input name="title" placeholder="Item title" required class="admin-input" />
+        <textarea name="description" rows="2" placeholder="Description" class="admin-input"></textarea>
+        <input name="price_points" type="number" min="0" placeholder="Price in points" required class="admin-input" />
+        <input name="stock" type="number" value="-1" placeholder="Stock (-1 = unlimited)" class="admin-input" />
+        <input name="image_url" placeholder="Image URL" class="admin-input" />
+        <label class="flex items-center gap-2 text-slateMuted">
+          <input name="is_active" type="checkbox" checked class="accent-emeraldSoft" /> Active
+        </label>
+        <button class="admin-submit">Save item</button>
+      </form>
+      <div id="admin-item-list" class="mt-5 space-y-2 text-sm"></div>
+    </div>
+
+    <!-- Points -->
+    <div class="glass rounded-xl p-6">
+      <h3 class="font-display text-2xl font-semibold text-cyanSoft mb-4">Manual point adjustment</h3>
+      <form id="admin-points-form" class="space-y-3 text-sm">
+        <input name="discord_id" placeholder="Discord ID" required class="admin-input" />
+        <input name="delta" type="number" placeholder="Delta (e.g. 50 or -20)" required class="admin-input" />
+        <button class="admin-submit">Apply adjustment</button>
+      </form>
+      <h3 class="font-display text-2xl font-semibold text-cyanSoft mt-8 mb-3">Recent redemptions</h3>
+      <div id="admin-transactions" class="space-y-2 text-sm"></div>
+    </div>
+  </div>
+</section>
+
+<footer class="border-t border-cyanSoft/15 py-10 text-center text-sm text-slateMuted">
+  <p class="font-display text-lg gradient-text mb-1">SOCIET GAME STUDIO</p>
+  <p>Built among the stars · Powered by Discord</p>
+</footer>
+
+<!-- ============================== MODALS ============================== -->
+<div id="redeem-modal" class="hidden fixed inset-0 z-50 items-center justify-center bg-void/80 backdrop-blur-sm p-4">
+  <div class="glass rounded-2xl max-w-md w-full p-7">
+    <h3 class="font-display text-2xl font-bold gradient-text mb-2">Confirm redemption</h3>
+    <p id="redeem-text" class="text-slateMuted mb-6"></p>
+    <p id="redeem-error" class="hidden text-sm text-red-300 mb-4"></p>
+    <div class="flex justify-end gap-3">
+      <button data-close-modal="redeem-modal" class="px-4 py-2 rounded-lg border border-cyanSoft/30 text-slateMuted hover:text-slateLight">Cancel</button>
+      <button id="redeem-confirm" class="glow-btn px-5 py-2 rounded-lg font-semibold bg-gradient-to-r from-cyanSoft to-emeraldSoft text-void">Redeem</button>
+    </div>
+  </div>
+</div>
+
+<div id="profile-modal" class="hidden fixed inset-0 z-50 items-center justify-center bg-void/80 backdrop-blur-sm p-4">
+  <div class="glass rounded-2xl max-w-md w-full p-7">
+    <h3 class="font-display text-2xl font-bold gradient-text mb-5">Edit my profile</h3>
+    <form id="profile-form" class="space-y-3 text-sm">
+      <input name="nickname" placeholder="Nickname" class="admin-input" />
+      <input name="position" placeholder="Position" class="admin-input" />
+      <input name="contact_email" type="email" placeholder="Contact email" class="admin-input" />
+      <textarea name="bio" rows="3" placeholder="Bio" class="admin-input"></textarea>
+      <div class="flex justify-end gap-3 pt-2">
+        <button type="button" data-close-modal="profile-modal" class="px-4 py-2 rounded-lg border border-cyanSoft/30 text-slateMuted hover:text-slateLight">Cancel</button>
+        <button class="glow-btn px-5 py-2 rounded-lg font-semibold bg-gradient-to-r from-cyanSoft to-emeraldSoft text-void">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .admin-input {
+    width: 100%; border-radius: .6rem; padding: .55rem .8rem;
+    background: rgba(11,5,32,.65); border: 1px solid rgba(56,189,248,.22); color: #f1f5f9;
+  }
+  .admin-input:focus { outline: none; border-color: #34d399; box-shadow: 0 0 0 2px rgba(52,211,153,.18); }
+  .admin-submit {
+    width: 100%; border-radius: .6rem; padding: .55rem 1rem; font-weight: 600; color: #0b0520;
+    background-image: linear-gradient(90deg, #38bdf8, #34d399);
+  }
+  .admin-submit:hover { opacity: .92; }
+</style>
+
+<script>
+/* ------------------------------------------------------------------ VFX CANVAS */
+(function starfield() {
+  const canvas = document.getElementById('vfx');
+  const ctx = canvas.getContext('2d');
+  let stars = [], shooting = null, w = 0, h = 0;
+
+  function resize() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+    const count = Math.min(240, Math.round((w * h) / 7000));
+    stars = Array.from({ length: count }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      r: Math.random() * 1.4 + 0.3,
+      a: Math.random(),
+      speed: Math.random() * 0.018 + 0.004,
+      hue: Math.random() > 0.75 ? '52,211,153' : '186,230,253'
+    }));
+  }
+
+  function spawnShootingStar() {
+    shooting = {
+      x: Math.random() * w * 0.7,
+      y: Math.random() * h * 0.4,
+      len: Math.random() * 140 + 90,
+      vx: Math.random() * 5 + 6,
+      vy: Math.random() * 2 + 1.6,
+      life: 1
+    };
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    for (const s of stars) {
+      s.a += s.speed;
+      const alpha = 0.25 + Math.abs(Math.sin(s.a)) * 0.75;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${s.hue},${alpha.toFixed(3)})`;
+      ctx.fill();
+    }
+    if (shooting) {
+      const g = ctx.createLinearGradient(shooting.x, shooting.y,
+        shooting.x - shooting.len, shooting.y - shooting.len * 0.35);
+      g.addColorStop(0, `rgba(56,189,248,${shooting.life})`);
+      g.addColorStop(1, 'rgba(56,189,248,0)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(shooting.x, shooting.y);
+      ctx.lineTo(shooting.x - shooting.len, shooting.y - shooting.len * 0.35);
+      ctx.stroke();
+      shooting.x += shooting.vx;
+      shooting.y += shooting.vy;
+      shooting.life -= 0.012;
+      if (shooting.life <= 0 || shooting.x > w + shooting.len) shooting = null;
+    }
+    requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  draw();
+  setInterval(() => { if (!shooting && Math.random() > 0.4) spawnShootingStar(); }, 4200);
+})();
+
+/* ------------------------------------------------------------------ HELPERS */
+const $ = (sel) => document.querySelector(sel);
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    headers: options.body ? { 'Content-Type': 'application/json' } : {},
+    ...options
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw Object.assign(new Error(data?.error || response.statusText), { data });
+  return data;
+}
+
+function openModal(id) { const m = $('#' + id); m.classList.remove('hidden'); m.classList.add('flex'); }
+function closeModal(id) { const m = $('#' + id); m.classList.add('hidden'); m.classList.remove('flex'); }
+document.querySelectorAll('[data-close-modal]').forEach((btn) =>
+  btn.addEventListener('click', () => closeModal(btn.dataset.closeModal)));
+
+const STATUS_STYLES = {
+  'IN DEVELOPMENT': 'bg-cyanSoft/15 text-cyanSoft border-cyanSoft/40',
+  'RELEASED': 'bg-emeraldSoft/15 text-emeraldSoft border-emeraldSoft/40',
+  'PROTOTYPE': 'bg-purple-400/15 text-purple-200 border-purple-300/40'
+};
+
+let state = { user: null, items: [], selectedItem: null };
+
+/* ------------------------------------------------------------------ SESSION / RBAC */
+async function loadSession() {
+  const me = await api('/api/me');
+  state.user = me.authenticated ? me : null;
+  const role = me.role || 'guest';
+
+  const authed = role === 'employee' || role === 'admin';
+  document.querySelectorAll('[data-auth-only]').forEach((el) => el.classList.toggle('hidden', !authed));
+  document.querySelectorAll('[data-admin-only]').forEach((el) => el.classList.toggle('hidden', role !== 'admin'));
+
+  if (me.authenticated) {
+    $('#login-btn').classList.add('hidden');
+    $('#user-chip').classList.remove('hidden');
+    $('#user-chip').classList.add('flex');
+    $('#user-avatar').src = me.avatar_url || 'assets/IMG_20260719_104125.png';
+    $('#user-name').textContent = me.employee?.nickname || me.username || 'Operative';
+    $('#user-role').textContent = role;
+  }
+
+  if (authed) {
+    $('#points-balance').textContent = me.employee.points;
+    await Promise.all([loadStore(), loadMyTransactions()]);
+  }
+  if (role === 'admin') await loadAdminPanels();
+}
+
+$('#logout-btn').addEventListener('click', async () => {
+  await api('/auth/logout', { method: 'POST' });
+  window.location.reload();
+});
+
+/* ------------------------------------------------------------------ ROSTER */
+async function loadRoster() {
+  const employees = await api('/api/employees');
+  const container = $('#roster');
+  $('#roster-empty').classList.toggle('hidden', employees.length > 0);
+  container.innerHTML = employees.map((emp, index) => `
+    <div class="glass rounded-xl overflow-hidden transition">
+      <button class="w-full flex items-center justify-between gap-4 px-5 py-4 text-left" data-accordion="${index}">
+        <span class="flex items-center gap-4">
+          <span class="h-10 w-10 rounded-full bg-gradient-to-br from-cyanSoft to-emeraldSoft text-void
+                       font-display font-bold text-lg flex items-center justify-center">
+            ${escapeHtml((emp.nickname || '?').charAt(0).toUpperCase())}
+          </span>
+          <span>
+            <span class="block font-display text-xl text-slateLight">${escapeHtml(emp.nickname)}</span>
+            <span class="block text-xs uppercase tracking-widest text-cyanSoft">${escapeHtml(emp.position)}</span>
+          </span>
+        </span>
+        <span class="text-slateMuted text-xl">+</span>
+      </button>
+      <div class="accordion-body" id="acc-${index}">
+        <div class="px-5 pb-5 pt-1 text-sm text-slateMuted space-y-2 border-t border-cyanSoft/10">
+          <p>${escapeHtml(emp.bio || 'No biography recorded yet.')}</p>
+          ${emp.contact_email ? `<p class="text-cyanSoft">${escapeHtml(emp.contact_email)}</p>` : ''}
+          ${emp.is_admin ? '<p class="text-emeraldSoft text-xs uppercase tracking-widest">Director access</p>' : ''}
+        </div>
+      </div>
+    </div>`).join('');
+
+  container.querySelectorAll('[data-accordion]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const body = $('#acc-' + btn.dataset.accordion);
+      const isOpen = body.classList.toggle('open');
+      btn.lastElementChild.textContent = isOpen ? '−' : '+';
+    });
+  });
+}
+
+/* ------------------------------------------------------------------ ARCHIVES */
+async function loadGames() {
+  const games = await api('/api/games');
+  $('#games-empty').classList.toggle('hidden', games.length > 0);
+  $('#games-grid').innerHTML = games.map((game) => `
+    <article class="glass rounded-xl overflow-hidden flex flex-col transition hover:-translate-y-1 duration-300">
+      <div class="h-40 bg-cover bg-center border-b border-cyanSoft/10"
+           style="background-image:url('${escapeHtml(game.image_url || 'assets/IMG_3555.jpg')}')"></div>
+      <div class="p-5 flex flex-col gap-3 grow">
+        <div class="flex items-start justify-between gap-3">
+          <h3 class="font-display text-2xl text-slateLight">${escapeHtml(game.title)}</h3>
+          <span class="shrink-0 text-[10px] font-semibold uppercase tracking-widest px-2 py-1 rounded border
+                       ${STATUS_STYLES[game.status] || 'bg-slate-500/15 text-slateMuted border-slate-400/30'}">
+            ${escapeHtml(game.status)}
+          </span>
+        </div>
+        <p class="text-sm text-slateMuted grow">${escapeHtml(game.description || '')}</p>
+        ${game.platforms ? `<p class="text-xs text-cyanSoft/80">${escapeHtml(game.platforms)}</p>` : ''}
+      </div>
+    </article>`).join('');
+}
+
+/* ------------------------------------------------------------------ STORE */
+async function loadStore() {
+  state.items = await api('/api/store/items');
+  $('#store-empty').classList.toggle('hidden', state.items.length > 0);
+  $('#store-grid').innerHTML = state.items.map((item) => `
+    <article class="glass rounded-xl overflow-hidden flex flex-col">
+      <div class="h-36 bg-cover bg-center border-b border-cyanSoft/10"
+           style="background-image:url('${escapeHtml(item.image_url || 'assets/IMG_3555.jpg')}')"></div>
+      <div class="p-5 flex flex-col gap-3 grow">
+        <h3 class="font-display text-xl text-slateLight">${escapeHtml(item.title)}</h3>
+        <p class="text-sm text-slateMuted grow">${escapeHtml(item.description || '')}</p>
+        <p class="text-xs text-slateMuted">${item.stock < 0 ? 'Unlimited stock' : `${item.stock} left`}</p>
+        <div class="flex items-center justify-between pt-1">
+          <span class="font-display text-2xl text-emeraldSoft">${item.price_points} pts</span>
+          <button data-redeem="${item.id}" ${item.stock === 0 ? 'disabled' : ''}
+                  class="glow-btn rounded-lg px-4 py-2 text-sm font-semibold text-void
+                         bg-gradient-to-r from-cyanSoft to-emeraldSoft disabled:opacity-40">
+            Redeem
+          </button>
+        </div>
+      </div>
+    </article>`).join('');
+
+  $('#store-grid').querySelectorAll('[data-redeem]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.selectedItem = state.items.find((i) => i.id === Number(btn.dataset.redeem));
+      $('#redeem-error').classList.add('hidden');
+      $('#redeem-text').textContent =
+        `Redeem "${state.selectedItem.title}" for ${state.selectedItem.price_points} points?`;
+      openModal('redeem-modal');
+    });
+  });
+}
+
+$('#redeem-confirm').addEventListener('click', async () => {
+  try {
+    const result = await api('/api/store/redeem', {
+      method: 'POST',
+      body: JSON.stringify({ item_id: state.selectedItem.id })
+    });
+    $('#points-balance').textContent = result.points;
+    closeModal('redeem-modal');
+    await Promise.all([loadStore(), loadMyTransactions()]);
+  } catch (err) {
+    const error = $('#redeem-error');
+    error.textContent = err.message === 'insufficient_points'
+      ? `Not enough points (you have ${err.data.points}, need ${err.data.required}).`
+      : `Redemption failed: ${err.message}`;
+    error.classList.remove('hidden');
+  }
+});
+
+async function loadMyTransactions() {
+  const rows = await api('/api/me/transactions');
+  $('#my-transactions').innerHTML = rows.length
+    ? rows.map((row) => `
+        <div class="flex justify-between px-5 py-3">
+          <span class="text-slateLight">${escapeHtml(row.title || 'Removed item')}</span>
+          <span class="text-slateMuted">${row.points_spent} pts · ${escapeHtml(row.created_at)}</span>
+        </div>`).join('')
+    : '<p class="px-5 py-4 text-slateMuted italic">No redemptions yet.</p>';
+}
+
+/* ------------------------------------------------------------------ PROFILE */
+$('#edit-profile-btn').addEventListener('click', () => {
+  const emp = state.user.employee;
+  const form = $('#profile-form');
+  form.nickname.value = emp.nickname || '';
+  form.position.value = emp.position || '';
+  form.contact_email.value = emp.contact_email || '';
+  form.bio.value = emp.bio || '';
+  openModal('profile-modal');
+});
+
+$('#profile-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const updated = await api('/api/me/profile', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      nickname: form.nickname.value,
+      position: form.position.value,
+      contact_email: form.contact_email.value,
+      bio: form.bio.value
+    })
+  });
+  state.user.employee = updated;
+  $('#user-name').textContent = updated.nickname;
+  closeModal('profile-modal');
+  await loadRoster();
+});
+
+/* ------------------------------------------------------------------ ADMIN */
+function formValues(form) {
+  const values = {};
+  for (const field of form.elements) {
+    if (!field.name) continue;
+    values[field.name] = field.type === 'checkbox' ? field.checked : field.value;
+  }
+  return values;
+}
+
+async function loadAdminPanels() {
+  const [employees, games, items, transactions] = await Promise.all([
+    api('/api/employees'), api('/api/games'),
+    api('/api/admin/store/items'), api('/api/admin/transactions')
+  ]);
+
+  $('#admin-employee-list').innerHTML = employees.map((emp) => `
+    <div class="flex items-center justify-between gap-3 rounded-lg bg-void/40 px-3 py-2">
+      <span class="text-slateMuted truncate">
+        ${escapeHtml(emp.nickname)} · ${escapeHtml(emp.position)} · ${emp.points} pts
+      </span>
+      <button data-del-emp="${emp.id}" class="text-red-300 hover:text-red-200 text-xs">Delete</button>
+    </div>`).join('');
+
+  $('#admin-game-list').innerHTML = games.map((game) => `
+    <div class="flex items-center justify-between gap-3 rounded-lg bg-void/40 px-3 py-2">
+      <span class="text-slateMuted truncate">${escapeHtml(game.title)} · ${escapeHtml(game.status)}</span>
+      <button data-del-game="${game.id}" class="text-red-300 hover:text-red-200 text-xs">Delete</button>
+    </div>`).join('');
+
+  $('#admin-item-list').innerHTML = items.map((item) => `
+    <div class="flex items-center justify-between gap-3 rounded-lg bg-void/40 px-3 py-2">
+      <span class="text-slateMuted truncate">
+        ${escapeHtml(item.title)} · ${item.price_points} pts ${item.is_active ? '' : '· inactive'}
+      </span>
+      <button data-del-item="${item.id}" class="text-red-300 hover:text-red-200 text-xs">Delete</button>
+    </div>`).join('');
+
+  $('#admin-transactions').innerHTML = transactions.length
+    ? transactions.map((row) => `
+        <div class="rounded-lg bg-void/40 px-3 py-2 text-slateMuted">
+          ${escapeHtml(row.nickname || row.discord_id)} → ${escapeHtml(row.item_title || 'Removed item')}
+          · ${row.points_spent} pts · ${escapeHtml(row.created_at)}
+        </div>`).join('')
+    : '<p class="text-slateMuted italic">No redemptions yet.</p>';
+
+  bindDelete('[data-del-emp]', 'delEmp', '/api/admin/employees/');
+  bindDelete('[data-del-game]', 'delGame', '/api/admin/games/');
+  bindDelete('[data-del-item]', 'delItem', '/api/admin/store/items/');
+}
+
+function bindDelete(selector, datasetKey, endpoint) {
+  document.querySelectorAll(selector).forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await api(endpoint + btn.dataset[datasetKey], { method: 'DELETE' });
+      await refreshAll();
+    });
+  });
+}
+
+function bindAdminForm(formId, endpoint) {
+  $(formId).addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await api(endpoint, { method: 'POST', body: JSON.stringify(formValues(event.target)) });
+    event.target.reset();
+    await refreshAll();
+  });
+}
+
+bindAdminForm('#admin-employee-form', '/api/admin/employees');
+bindAdminForm('#admin-game-form', '/api/admin/games');
+bindAdminForm('#admin-item-form', '/api/admin/store/items');
+bindAdminForm('#admin-points-form', '/api/admin/points');
+
+/* ------------------------------------------------------------------ BOOT */
+async function refreshAll() {
+  await Promise.all([loadRoster(), loadGames()]);
+  await loadSession();
+}
+refreshAll().catch((err) => console.error('Failed to initialise portal:', err));
+</script>
+</body>
+</html>
