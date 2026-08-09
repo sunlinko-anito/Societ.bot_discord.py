@@ -41,6 +41,8 @@ SESSION_COOKIE = "societ_session"
 SESSION_TTL = 60 * 60 * 24 * 7
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("PORT", "5000"))
+# Origins allowed to call the API with credentials, e.g. the standalone Societ-web site.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -76,9 +78,15 @@ def init_db() -> None:
             bio TEXT,
             contact_email TEXT,
             points INTEGER DEFAULT 0,
-            is_admin INTEGER DEFAULT 0
+            is_admin INTEGER DEFAULT 0,
+            is_visible INTEGER DEFAULT 1
         )
     """)
+
+    # Databases created before profile visibility existed.
+    columns = {row["name"] for row in cursor.execute("PRAGMA table_info(employees)")}
+    if "is_visible" not in columns:
+        cursor.execute("ALTER TABLE employees ADD COLUMN is_visible INTEGER DEFAULT 1")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
@@ -138,6 +146,7 @@ def employee_public(row: sqlite3.Row) -> dict:
         "contact_email": row["contact_email"],
         "points": row["points"],
         "is_admin": bool(row["is_admin"]),
+        "is_visible": bool(row["is_visible"]),
     }
 
 
@@ -318,10 +327,18 @@ async def api_me(request: web.Request) -> web.StreamResponse:
 # --------------------------------------------------------------------------------------
 
 async def api_employees(request: web.Request) -> web.StreamResponse:
+    """Public roster. Hidden profiles are only returned to admins and to their owner."""
+    user = current_user(request)
     conn = get_conn()
     rows = conn.execute("SELECT * FROM employees ORDER BY is_admin DESC, nickname ASC").fetchall()
     conn.close()
-    return web.json_response([employee_public(row) for row in rows])
+
+    is_admin = bool(user and user["role"] == "admin")
+    own_id = user["discord_id"] if user else None
+    return web.json_response([
+        employee_public(row) for row in rows
+        if row["is_visible"] or is_admin or row["discord_id"] == own_id
+    ])
 
 
 async def api_games(request: web.Request) -> web.StreamResponse:
@@ -434,6 +451,8 @@ async def api_update_profile(request: web.Request) -> web.StreamResponse:
     body = await read_json(request)
     fields = {key: body[key] for key in ("nickname", "position", "bio", "contact_email")
               if key in body and body[key] is not None}
+    if "is_visible" in body:
+        fields["is_visible"] = int(bool(body["is_visible"]))
     if not fields:
         return web.json_response({"error": "nothing_to_update"}, status=400)
 
@@ -463,17 +482,20 @@ async def admin_upsert_employee(request: web.Request) -> web.StreamResponse:
 
     conn = get_conn()
     conn.execute(
-        """INSERT INTO employees (discord_id, nickname, position, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO employees
+               (discord_id, nickname, position, bio, contact_email, points, is_admin, is_visible)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(discord_id) DO UPDATE SET
                nickname = excluded.nickname,
                position = excluded.position,
                bio = excluded.bio,
                contact_email = excluded.contact_email,
                points = excluded.points,
-               is_admin = excluded.is_admin""",
+               is_admin = excluded.is_admin,
+               is_visible = excluded.is_visible""",
         (discord_id, nickname, position, body.get("bio"), body.get("contact_email"),
-         int(body.get("points") or 0), int(bool(body.get("is_admin")))),
+         int(body.get("points") or 0), int(bool(body.get("is_admin"))),
+         int(bool(body.get("is_visible", True)))),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
@@ -631,8 +653,28 @@ async def healthcheck(request: web.Request) -> web.StreamResponse:
     return web.json_response({"status": "online", "bot": bool(bot.user and bot.is_ready())})
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    """Allow the standalone Societ-web site to call this API with session cookies."""
+    origin = request.headers.get("Origin")
+    allowed = origin if origin in ALLOWED_ORIGINS else None
+
+    if request.method == "OPTIONS" and allowed:
+        response: web.StreamResponse = web.Response(status=204)
+    else:
+        response = await handler(request)
+
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = allowed
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
 def build_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app.add_routes([
         web.get("/", index),
         web.get("/healthz", healthcheck),
@@ -658,6 +700,7 @@ def build_app() -> web.Application:
         web.post("/api/admin/store/items", admin_upsert_store_item),
         web.delete("/api/admin/store/items/{item_id}", admin_delete_store_item),
         web.get("/api/admin/transactions", admin_transactions),
+        web.options("/{tail:.*}", lambda request: web.Response(status=204)),
     ])
     app.router.add_static("/assets/", BASE_DIR / "assets")
     return app
@@ -854,6 +897,45 @@ async def points_give(interaction: discord.Interaction, member: discord.Member, 
 
 
 bot.tree.add_command(points_group)
+
+
+profile_group = app_commands.Group(name="profile", description="🪪 Manage your own operative profile")
+
+
+@profile_group.command(name="bio", description="Update your own biography")
+@app_commands.describe(text="The biography shown on your roster card")
+async def profile_bio(interaction: discord.Interaction, text: str) -> None:
+    if not fetch_employee(str(interaction.user.id)):
+        await interaction.response.send_message(
+            "❌ You are not registered yet. Ask an admin to run `/add_employee`.", ephemeral=True)
+        return
+
+    conn = get_conn()
+    conn.execute("UPDATE employees SET bio = ? WHERE discord_id = ?", (text, str(interaction.user.id)))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message("✅ Biography updated.", ephemeral=True)
+
+
+@profile_group.command(name="visibility", description="Show or hide your card on the public roster")
+@app_commands.describe(visible="True shows your profile publicly, False hides it")
+async def profile_visibility(interaction: discord.Interaction, visible: bool) -> None:
+    if not fetch_employee(str(interaction.user.id)):
+        await interaction.response.send_message(
+            "❌ You are not registered yet. Ask an admin to run `/add_employee`.", ephemeral=True)
+        return
+
+    conn = get_conn()
+    conn.execute("UPDATE employees SET is_visible = ? WHERE discord_id = ?",
+                 (int(visible), str(interaction.user.id)))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(
+        f"✅ Your profile is now **{'visible' if visible else 'hidden'}** on the public roster.",
+        ephemeral=True)
+
+
+bot.tree.add_command(profile_group)
 
 
 # --------------------------------------------------------------------------------------

@@ -5,11 +5,11 @@ Dark space-themed studio portal backed by a Discord bot. A single process runs b
 
 | File | Purpose |
 | --- | --- |
-| `main (2).py` | Discord bot, REST API, Discord OAuth2, RBAC, SQLite (`database.db`) |
+| `main.py` | Discord bot, REST API, Discord OAuth2, RBAC, SQLite (`database.db`) |
 | `index.html` | Single-page frontend (Tailwind CDN, canvas starfield VFX) |
 | `seed_database.py` | Demo operatives, projects and store items |
 | `assets/` | `IMG_20260719_104125.png` (logo), `IMG_3555.jpg` (wallpaper) |
-| `main.py` | Legacy internal ops bot (tickets, meetings, voice master) — unchanged |
+| `main(old).py` | Legacy internal ops bot (tickets, meetings, voice master) — unchanged |
 
 ## Run
 
@@ -18,7 +18,7 @@ pip install -r requirements.txt
 cp .env.example .env          # fill in the values
 set -a && source .env && set +a
 python seed_database.py --admin-discord-id <your-discord-id>   # optional demo data
-python "main (2).py"
+python main.py
 ```
 
 The portal is served at http://localhost:5000. Without `DISCORD_TOKEN` the web portal still
@@ -49,6 +49,8 @@ URL) as an OAuth2 redirect.
 Public: `GET /api/employees`, `GET /api/games`, `GET /api/store/items`, `GET /api/me`
 
 Employee: `POST /api/store/redeem`, `GET /api/me/transactions`, `PATCH /api/me/profile`
+(the last one also accepts `is_visible` so an operative can hide their own card from the
+public roster)
 
 Admin: `POST|DELETE /api/admin/employees`, `POST /api/admin/points`,
 `POST|DELETE /api/admin/games`, `GET|POST|DELETE /api/admin/store/items`,

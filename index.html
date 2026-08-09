@@ -8,7 +8,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@1,500;1,600&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <script>
   tailwind.config = {
     theme: {
@@ -59,10 +59,17 @@
   #vfx { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
 
   @keyframes pulseGlowSoft {
-    0%, 100% { filter: drop-shadow(0 0 4px rgba(56,189,248,.45)) drop-shadow(0 0 10px rgba(52,211,153,.25)); transform: scale(1); }
-    50%      { filter: drop-shadow(0 0 12px rgba(56,189,248,.85)) drop-shadow(0 0 22px rgba(52,211,153,.55)); transform: scale(1.04); }
+    0%, 100% { text-shadow: 0 0 6px rgba(255,255,255,.25), 0 0 14px rgba(56,189,248,.2); }
+    50%      { text-shadow: 0 0 14px rgba(255,255,255,.6), 0 0 26px rgba(52,211,153,.4); }
   }
   .pulse-glow-soft { animation: pulseGlowSoft 3.4s ease-in-out infinite; }
+
+  /* Wordmark matching the studio artwork: italic Playfair Display, mixed case. */
+  .logo-wordmark {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-style: italic; font-weight: 500; letter-spacing: .02em;
+    color: #f1f5f9; text-transform: none;
+  }
 
   .gradient-text {
     background: linear-gradient(92deg, #38bdf8 0%, #a5f3fc 45%, #34d399 100%);
@@ -92,10 +99,8 @@
 <!-- ============================== NAVBAR ============================== -->
 <header class="fixed top-0 inset-x-0 z-40 glass border-b border-cyanSoft/20">
   <nav class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-    <a href="#origins" class="flex items-center gap-3 shrink-0">
-      <img src="assets/IMG_20260719_104125.png" alt="Societ logo"
-           class="h-10 w-10 rounded-full object-cover pulse-glow-soft" />
-      <span class="font-display text-2xl font-bold gradient-text">SOCIET</span>
+    <a href="#origins" class="shrink-0 select-none">
+      <span class="logo-wordmark pulse-glow-soft text-3xl sm:text-4xl">Societ</span>
     </a>
 
     <div class="hidden md:flex items-center gap-7 font-display text-lg text-slateMuted">
@@ -129,7 +134,7 @@
 <section id="origins" class="relative min-h-screen flex items-center justify-center px-6 pt-24 pb-16">
   <div class="max-w-3xl text-center">
     <p class="font-display tracking-[0.45em] text-sm text-cyanSoft/80 mb-5">GAME STUDIO · EST. IN THE VOID</p>
-    <h1 class="font-display text-6xl sm:text-8xl font-bold gradient-text mb-6">SOCIET</h1>
+    <h1 class="logo-wordmark pulse-glow-soft text-7xl sm:text-9xl mb-6">Societ</h1>
     <p class="text-lg sm:text-xl text-slateMuted leading-relaxed mb-10">
       We build worlds out of starlight and code — a small constellation of operatives
       crafting games that feel like the space between galaxies.
@@ -202,6 +207,9 @@
           <input name="points" type="number" value="0" placeholder="Points" class="admin-input" />
           <label class="flex items-center gap-2 text-slateMuted whitespace-nowrap">
             <input name="is_admin" type="checkbox" class="accent-emeraldSoft" /> Admin
+          </label>
+          <label class="flex items-center gap-2 text-slateMuted whitespace-nowrap">
+            <input name="is_visible" type="checkbox" checked class="accent-emeraldSoft" /> Visible
           </label>
         </div>
         <button class="admin-submit">Save operative</button>
@@ -284,6 +292,10 @@
       <input name="position" placeholder="Position" class="admin-input" />
       <input name="contact_email" type="email" placeholder="Contact email" class="admin-input" />
       <textarea name="bio" rows="3" placeholder="Bio" class="admin-input"></textarea>
+      <label class="flex items-center gap-2 text-slateMuted">
+        <input name="is_visible" type="checkbox" class="accent-emeraldSoft" />
+        Show my profile on the public roster
+      </label>
       <div class="flex justify-end gap-3 pt-2">
         <button type="button" data-close-modal="profile-modal" class="px-4 py-2 rounded-lg border border-cyanSoft/30 text-slateMuted hover:text-slateLight">Cancel</button>
         <button class="glow-btn px-5 py-2 rounded-lg font-semibold bg-gradient-to-r from-cyanSoft to-emeraldSoft text-void">Save</button>
@@ -564,6 +576,7 @@ $('#edit-profile-btn').addEventListener('click', () => {
   form.position.value = emp.position || '';
   form.contact_email.value = emp.contact_email || '';
   form.bio.value = emp.bio || '';
+  form.is_visible.checked = emp.is_visible !== false;
   openModal('profile-modal');
 });
 
@@ -576,7 +589,8 @@ $('#profile-form').addEventListener('submit', async (event) => {
       nickname: form.nickname.value,
       position: form.position.value,
       contact_email: form.contact_email.value,
-      bio: form.bio.value
+      bio: form.bio.value,
+      is_visible: form.is_visible.checked
     })
   });
   state.user.employee = updated;
@@ -604,7 +618,7 @@ async function loadAdminPanels() {
   $('#admin-employee-list').innerHTML = employees.map((emp) => `
     <div class="flex items-center justify-between gap-3 rounded-lg bg-void/40 px-3 py-2">
       <span class="text-slateMuted truncate">
-        ${escapeHtml(emp.nickname)} · ${escapeHtml(emp.position)} · ${emp.points} pts
+        ${escapeHtml(emp.nickname)} · ${escapeHtml(emp.position)} · ${emp.points} pts${emp.is_visible === false ? ' · hidden' : ''}
       </span>
       <button data-del-emp="${emp.id}" class="text-red-300 hover:text-red-200 text-xs">Delete</button>
     </div>`).join('');

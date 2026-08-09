@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 def load_backend():
-    spec = importlib.util.spec_from_file_location("societ_backend", BASE_DIR / "main (2).py")
+    spec = importlib.util.spec_from_file_location("societ_backend", BASE_DIR / "main.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
