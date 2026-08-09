@@ -27,6 +27,17 @@ starts (bot disabled), which is handy for frontend work.
 In the Discord Developer Portal add `http://localhost:5000/auth/callback` (or your public
 URL) as an OAuth2 redirect.
 
+## Serving the standalone Societ-web frontend
+
+[`sunlinko-anito/Societ-web`](https://github.com/sunlinko-anito/Societ-web) is the same portal
+hosted separately. Point its `config.js` `API_BASE` at this server and set here:
+
+```bash
+ALLOWED_ORIGINS=https://societ-web.example.com
+SESSION_COOKIE_SAMESITE=None      # cross-site cookies; browsers require HTTPS (localhost is exempt)
+POST_LOGIN_REDIRECT=https://societ-web.example.com
+```
+
 ## Roles
 
 | Role | Access |

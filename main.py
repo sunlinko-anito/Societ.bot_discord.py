@@ -43,6 +43,12 @@ WEB_HOST = os.getenv("HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("PORT", "5000"))
 # Origins allowed to call the API with credentials, e.g. the standalone Societ-web site.
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+# Cross-origin frontends need SameSite=None (which browsers only accept on HTTPS/localhost).
+COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+COOKIE_SECURE = COOKIE_SAMESITE.lower() == "none"
+
+# Where the browser lands after a successful OAuth2 callback (the standalone site, if any).
+POST_LOGIN_REDIRECT = os.getenv("POST_LOGIN_REDIRECT", "/")
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -262,7 +268,8 @@ async def auth_login(request: web.Request) -> web.StreamResponse:
         "prompt": "consent",
     }
     response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
-    response.set_cookie("societ_oauth_state", state, max_age=600, httponly=True, samesite="Lax")
+    response.set_cookie("societ_oauth_state", state, max_age=600, httponly=True,
+                        samesite=COOKIE_SAMESITE, secure=COOKIE_SECURE)
     raise response
 
 
@@ -302,9 +309,9 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         "avatar_url": avatar_url,
         "exp": int(time.time()) + SESSION_TTL,
     }
-    response = web.HTTPFound("/")
+    response = web.HTTPFound(POST_LOGIN_REDIRECT)
     response.set_cookie(SESSION_COOKIE, sign_session(payload), max_age=SESSION_TTL,
-                        httponly=True, samesite="Lax")
+                        httponly=True, samesite=COOKIE_SAMESITE, secure=COOKIE_SECURE)
     response.del_cookie("societ_oauth_state")
     raise response
 
@@ -700,7 +707,6 @@ def build_app() -> web.Application:
         web.post("/api/admin/store/items", admin_upsert_store_item),
         web.delete("/api/admin/store/items/{item_id}", admin_delete_store_item),
         web.get("/api/admin/transactions", admin_transactions),
-        web.options("/{tail:.*}", lambda request: web.Response(status=204)),
     ])
     app.router.add_static("/assets/", BASE_DIR / "assets")
     return app
