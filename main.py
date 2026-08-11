@@ -74,6 +74,7 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     """Create every table used by the bot and the web API."""
     conn = get_conn()
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
