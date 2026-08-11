@@ -693,6 +693,91 @@ def is_admin_user(discord_id: int) -> bool:
     return bool(row and row["is_admin"])
 
 
+@bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
+async def list_employees(interaction: discord.Interaction):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบ", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="👥 รายชื่อพนักงานทั้งหมดในระบบ", color=discord.Color.purple())
+
+    for row in rows:
+        discord_id, emp_id, nickname, position, mbti = row
+        embed.add_field(
+            name=f"⭐ [{emp_id}] {nickname}",
+            value=f"**ตำแหน่ง:** {position} | **MBTI:** {mbti}\n**บัญชี Discord:** <@{discord_id}>",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="view_employee", description="ดูข้อมูลพนักงานเฉพาะบุคคล")
+@app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการดูข้อมูล")
+async def view_employee(interaction: discord.Interaction, member: discord.Member):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT emp_id, nickname, position, mbti FROM employees WHERE discord_id = ?", (member.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        emp_id, nickname, position, mbti = row
+        embed = discord.Embed(title=f"🔎 ข้อมูลพนักงาน: {nickname}", color=discord.Color.blue())
+        embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
+        embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
+        embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
+        embed.add_field(name="🧠 MBTI", value=mbti, inline=True)
+        embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานของ {member.mention} ในระบบ", ephemeral=True)
+
+
+@app_commands.default_permissions(administrator=True)
+@bot.tree.command(name="delete_employee", description="ลบข้อมูลพนักงานออกจากระบบ")
+@app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการลบ")
+async def delete_employee(interaction: discord.Interaction, member: discord.Member):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT nickname FROM employees WHERE discord_id = ?", (member.id,))
+    row = cursor.fetchone()
+
+    if row:
+        nickname = row[0]
+        cursor.execute("DELETE FROM employees WHERE discord_id = ?", (member.id,))
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message(f"🗑️ ลบข้อมูลของ **{nickname}** ({member.mention}) ออกจากระบบแล้ว")
+    else:
+        conn.close()
+        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+@bot.tree.command(name="hello", description="Say hello!")
+async def hello(interaction: discord.Interaction):
+    try:
+        await interaction.response.send_message(f"hello {interaction.user.mention}! 👋", ephemeral=False)
+    except Exception as e:
+        await interaction.response.send_message("An error occurred.", ephemeral=True)
+        print(f"Slash command error: {e}")
+
+
+
 @bot.tree.command(name="test", description="🩺 Health check for the Societ systems")
 async def test(interaction: discord.Interaction) -> None:
     embed = discord.Embed(
