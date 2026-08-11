@@ -389,6 +389,7 @@ def read_session(token: Optional[str]) -> Optional[dict]:
     if payload.get("exp", 0) < time.time():
         return None
     return payload
+    
 
 
 def current_user(request: web.Request) -> Optional[dict]:
@@ -496,6 +497,7 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
             if resp.status != 200:
                 return web.json_response({"error": "profile_fetch_failed"}, status=502)
             profile = await resp.json()
+            
 
     avatar = profile.get("avatar")
     avatar_url = (
@@ -527,6 +529,7 @@ async def api_me(request: web.Request) -> web.StreamResponse:
     if not user:
         return web.json_response({"authenticated": False, "role": "guest"})
     return web.json_response({"authenticated": True, **user})
+
 
 
 # --------------------------------------------------------------------------------------
@@ -646,7 +649,8 @@ async def api_my_transactions(request: web.Request) -> web.StreamResponse:
 
 @require_employee
 async def api_update_profile(request: web.Request) -> web.StreamResponse:
-    """Self-service editing of the caller's own bio / nickname / position / contact."""
+    """Self-service editing of the caller's own bio / nickname 
+    / position / contact."""
     body = await read_json(request)
     fields = {key: body[key] for key in ("nickname", "position", "bio", "contact_email")
               if key in body and body[key] is not None}
@@ -1188,6 +1192,7 @@ async def employee_add(
     embed.add_field(name="Points", value=str(current_points), inline=True)
     
     # Using the inline formatting logic you requested
+
     embed.add_field(name="Portal admin", value="Yes" if is_admin else "No", inline=True)
 
     await interaction.response.send_message(embed=embed)
@@ -1271,32 +1276,6 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
     conn.close()
 
     await interaction.response.send_message(f"🗑️ ลบข้อมูลพนักงานของ {member.mention} ออกจากระบบเรียบร้อยแล้ว")
-
-
-@bot.tree.command(name="rd_employee", description="สุ่มเลือกพนักงาน 1 คนจากระบบ")
-async def rd_employee(interaction: discord.Interaction):
-    conn = get_conn()
-    # ใช้ ORDER BY RANDOM() ของ SQLite เพื่อสุ่ม
-    row = conn.execute("SELECT * FROM employees ORDER BY RANDOM() LIMIT 1").fetchone()
-    conn.close()
-
-    if not row:
-        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบให้สุ่ม", ephemeral=True)
-        return
-
-    discord_id = row["discord_id"]
-    emp_id = row["emp_id"] or "N/A"
-    
-    embed = discord.Embed(
-        title="🎲 สุ่มพนักงานผู้โชคดี!",
-        description=f"ยินดีด้วย! <@{discord_id}> ได้รับการสุ่มเลือก",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="รหัสพนักงาน", value=emp_id, inline=True)
-    embed.add_field(name="ชื่อเล่น", value=row["nickname"], inline=True)
-    embed.add_field(name="ตำแหน่ง", value=row["position"], inline=True)
-
-    await interaction.response.send_message(embed=embed)
 
 
 @bot.event
