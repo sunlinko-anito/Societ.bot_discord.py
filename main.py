@@ -1130,21 +1130,111 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
 
     await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
 
+from typing import Optional
+import discord
+from discord import app_commands
 
-@bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
+
+# --------------------------------------------------------------------------------------
+# EMPLOYEE MANAGEMENT COMMANDS
+# --------------------------------------------------------------------------------------t
+
+@bot.tree.command(name="add_employee", description="🗂️ Add or update an operative record (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(
+    member="Discord account of the operative",
+    emp_id="Employee ID (e.g., EMP-001)",
+    nickname="Display nickname",
+    position="Role inside the studio",
+    mbti="MBTI Personality (Optional)",
+    bio="Short biography (Optional)",
+    gmail="Gmail account (Optional)",
+    points="Starting points balance",
+    is_admin="Grant admin access to the web portal"
+)
+async def add_employee(
+    interaction: discord.Interaction, 
+    member: discord.Member, 
+    emp_id: str,
+    nickname: str,
+    position: str, 
+    mbti: str = "N/A",
+    bio: Optional[str] = None,
+    gmail: Optional[str] = None, 
+    points: int = 0,
+    is_admin: bool = False
+) -> None:
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(discord_id) DO UPDATE SET
+               emp_id = excluded.emp_id,
+               nickname = excluded.nickname,
+               position = excluded.position,
+               mbti = excluded.mbti,
+               bio = COALESCE(excluded.bio, employees.bio),
+               contact_email = COALESCE(excluded.contact_email, employees.contact_email),
+               points = excluded.points,
+               is_admin = excluded.is_admin""",
+        (str(member.id), emp_id, nickname, position, mbti, bio, gmail, points, int(is_admin)),
+    )
+    conn.commit()
+    
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    conn.close()
+
+    embed = discord.Embed(
+        title="✨ Operative Profile Saved", 
+        description=f"Successfully updated employee record for {member.mention}",
+        color=0x34D399
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    # 👤 Primary Info
+    embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True)
+    embed.add_field(name="🏷️ Nickname", value=row['nickname'], inline=True)
+    embed.add_field(name="💼 Position", value=row['position'], inline=True)
+    
+    # 🧠 Details & Contact
+    embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
+    embed.add_field(name="✉️ Gmail", value=row['contact_email'] or "N/A", inline=True)
+    embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
+
+    # ⚙️ System Role
+    admin_status = "✅ Yes" if row['is_admin'] else "❌ No"
+    embed.add_field(name="🛠️ Portal Admin", value=admin_status, inline=False)
+    
+    # 📝 Biography
+    if row['bio']:
+        embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
+
+    embed.set_footer(text="Societ Game Studio • Database System")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="list_employees", description="👥 View all employee records in the system")
 async def list_employees(interaction: discord.Interaction):
     conn = get_conn()
     rows = conn.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees").fetchall()
     conn.close()
 
     if not rows:
-        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบ", ephemeral=True)
+        await interaction.response.send_message("📭 No employee records found in the system.", ephemeral=True)
         return
 
-    embed = discord.Embed(title="👥 รายชื่อพนักงานทั้งหมดในระบบ", color=discord.Color.purple())
+    embed = discord.Embed(
+        title="👥 Operative Roster", 
+        description="List of all registered studio employees",
+        color=discord.Color.purple()
+    )
 
     for row in rows:
-        # ใช้ key access เพราะ get_conn() คืนค่าเป็น sqlite3.Row
         discord_id = row["discord_id"]
         emp_id = row["emp_id"] or "N/A"
         nickname = row["nickname"]
@@ -1153,48 +1243,61 @@ async def list_employees(interaction: discord.Interaction):
         
         embed.add_field(
             name=f"⭐ [{emp_id}] {nickname}",
-            value=f"**ตำแหน่ง:** {position} | **MBTI:** {mbti}\n**บัญชี Discord:** <@{discord_id}>",
+            value=f"**💼 Position:** {position} | **🧩 MBTI:** {mbti}\n**📱 Discord Account:** <@{discord_id}>",
             inline=False
         )
 
+    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="view_employee", description="ดูข้อมูลโปรไฟล์ของพนักงานที่ระบุ")
-@app_commands.describe(member="เลือกพนักงานที่ต้องการดูข้อมูล")
+@bot.tree.command(name="view_employee", description="📋 View detailed profile of a specific operative")
+@app_commands.describe(member="Select the operative to view")
 async def view_employee(interaction: discord.Interaction, member: discord.Member):
     conn = get_conn()
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
     conn.close()
 
     if not row:
-        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
+        await interaction.response.send_message(f"❌ No records found for {member.mention}", ephemeral=True)
         return
 
     embed = discord.Embed(
-        title=f"📋 โปรไฟล์พนักงาน: {row['nickname']}",
+        title=f"📋 Profile: {row['nickname']}",
+        description=f"Operative details for {member.mention}",
         color=discord.Color.blue()
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     
-    embed.add_field(name="รหัสพนักงาน", value=row["emp_id"] or "N/A", inline=True)
-    embed.add_field(name="ชื่อเล่น", value=row["nickname"], inline=True)
-    embed.add_field(name="ตำแหน่ง", value=row["position"], inline=True)
-    embed.add_field(name="MBTI", value=row["mbti"] or "N/A", inline=True)
-    embed.add_field(name="คะแนนสะสม (Points)", value=str(row["points"]), inline=True)
-    embed.add_field(name="ผู้ดูแลระบบ (Admin)", value="Yes" if row["is_admin"] else "No", inline=True)
+    # 👤 Primary Info
+    embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id'] or 'N/A'}`", inline=True)
+    embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
+    embed.add_field(name="💼 Position", value=row["position"], inline=True)
+    
+    # 🧠 Details & Contact
+    embed.add_field(name="🧩 MBTI", value=row["mbti"] or "N/A", inline=True)
+    embed.add_field(name="✉️ Gmail", value=row["contact_email"] or "N/A", inline=True)
+    embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
 
+    # ⚙️ System Role
+    admin_status = "✅ Yes" if row["is_admin"] else "❌ No"
+    embed.add_field(name="🛠️ Portal Admin", value=admin_status, inline=False)
+
+    # 📝 Biography
     if row["bio"]:
-        embed.add_field(name="ประวัติ (Bio)", value=row["bio"], inline=False)
+        embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
 
+    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="delete_employee", description="ลบพนักงานออกจากระบบ (เฉพาะ Admin)")
-@app_commands.describe(member="เลือกพนักงานที่ต้องการลบ")
+@bot.tree.command(name="delete_employee", description="🗑️ Remove an operative record (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(member="Select the operative to delete")
 async def delete_employee(interaction: discord.Interaction, member: discord.Member):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", ephemeral=True)
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
     conn = get_conn()
@@ -1202,14 +1305,46 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
     
     if not row:
         conn.close()
-        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
+        await interaction.response.send_message(f"❌ No records found for {member.mention}", ephemeral=True)
         return
 
     conn.execute("DELETE FROM employees WHERE discord_id = ?", (str(member.id),))
     conn.commit()
     conn.close()
 
-    await interaction.response.send_message(f"🗑️ ลบข้อมูลพนักงานของ {member.mention} ออกจากระบบเรียบร้อยแล้ว")
+    embed = discord.Embed(
+        title="🗑️ Record Deleted",
+        description=f"Successfully removed **{row['nickname']}** ({member.mention}) from the database.",
+        color=discord.Color.red()
+    )
+    embed.set_footer(text="Societ Game Studio • Database System")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="rd_employee", description="🎲 Randomly select an operative from the database")
+async def rd_employee(interaction: discord.Interaction):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM employees ORDER BY RANDOM() LIMIT 1").fetchone()
+    conn.close()
+
+    if not row:
+        await interaction.response.send_message("📭 No employee records available to pick from.", ephemeral=True)
+        return
+
+    discord_id = row["discord_id"]
+    emp_id = row["emp_id"] or "N/A"
+    
+    embed = discord.Embed(
+        title="🎲 Random Selection Winner!",
+        description=f"Congratulations! <@{discord_id}> has been selected.",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="📋 Employee ID", value=f"`{emp_id}`", inline=True)
+    embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
+    embed.add_field(name="💼 Position", value=row["position"], inline=True)
+    
+    embed.set_footer(text="Societ Game Studio • Database System")
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.event
