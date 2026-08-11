@@ -116,6 +116,45 @@ def init_db() -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic TEXT NOT NULL,
+            meeting_time TEXT NOT NULL,
+            channel_id INTEGER NOT NULL,
+            mention_id INTEGER NOT NULL,
+            is_done INTEGER DEFAULT 0
+        )
+    """)
+
+    # บังคับสร้างตาราง Employees
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS employees (
+           discord_id INTEGER PRIMARY KEY,
+           emp_id TEXT NOT NULL,
+           nickname TEXT,
+           position TEXT,
+           mbti TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            guild_id INTEGER PRIMARY KEY,
+            welcome_channel_id INTEGER,
+            log_channel_id INTEGER,
+            voice_master_id INTEGER,
+            voice_category_id INTEGER
+        )
+    """)
+    # ตารางเก็บข้อมูลห้องตั๋ว (Ticket) ที่กำลังเปิดอยู่
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tickets (
+            ticket_channel_id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            status TEXT DEFAULT 'open'
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("[Database] Tables ready in", DB_NAME)
