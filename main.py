@@ -1336,7 +1336,7 @@ async def rd_employee(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎲 Random Selection Winner!",
-        description=f"Congratulations! <@{discord_id}> has been selected.",
+        description=f"<@{discord_id}> has been selected.",
         color=discord.Color.gold()
     )
     embed.add_field(name="📋 Employee ID", value=f"`{emp_id}`", inline=True)
@@ -1390,126 +1390,6 @@ async def work(interaction: discord.Interaction, channel: discord.TextChannel,
     await channel.send(content=member.mention, embed=embed)
     await interaction.response.send_message(
         f"✅ Reminder sent to {member.display_name} in {channel.mention}.", ephemeral=True)
-
-
-@bot.tree.command(name="rd_employee", description="🎲 Pick a random operative (optionally by position)")
-@app_commands.describe(channel="Channel that receives the result",
-                       position="Filter by position; leave empty to draw from everyone")
-async def rd_employee(interaction: discord.Interaction, channel: discord.TextChannel,
-                      position: Optional[str] = None) -> None:
-    await interaction.response.defer(ephemeral=True)
-
-    conn = get_conn()
-    if position and position.strip():
-        rows = conn.execute(
-            "SELECT * FROM employees WHERE LOWER(position) LIKE LOWER(?)",
-            (f"%{position.strip()}%",),
-        ).fetchall()
-        scope = f"position: {position.strip()}"
-    else:
-        rows = conn.execute("SELECT * FROM employees").fetchall()
-        scope = "all operatives"
-    conn.close()
-
-    if not rows:
-        await interaction.followup.send(f"❌ No operatives found for {scope}.", ephemeral=True)
-        return
-
-    picked = random.choice(rows)
-    embed = discord.Embed(
-        title=f"🎲 Random operative ({scope})",
-        description=(f"<@{picked['discord_id']}> — **{picked['nickname']}**\n"
-                     f"Position: **{picked['position']}**"),
-        color=0x38BDF8,
-    )
-    await channel.send(content=f"<@{picked['discord_id']}>", embed=embed)
-    await interaction.followup.send(f"✅ Result posted in {channel.mention}.", ephemeral=True)
-
-
-@bot.tree.command(name="add_employee", description="🗂️ เพิ่มหรืออัปเดตข้อมูลพนักงาน (เฉพาะ Admin)")
-@app_commands.default_permissions(administrator=True)
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    member="เลือกบัญชี Discord ของพนักงาน",
-    emp_id="รหัสพนักงาน (เช่น EMP-001)",
-    nickname="ชื่อเล่น (Display nickname)",
-    position="ตำแหน่งในสตูดิโอ",
-    mbti="บุคลิกภาพ MBTI (ไม่บังคับ)",
-    bio="ประวัติย่อ (ไม่บังคับ)",
-    contact_email="อีเมลที่ใช้ติดต่อ (ไม่บังคับ)",
-    points="คะแนนสะสมเริ่มต้น",
-    is_admin="ให้สิทธิ์ Admin ในเว็บพอร์ทัลหรือไม่?"
-)
-async def add_employee(
-    interaction: discord.Interaction, 
-    member: discord.Member, 
-    emp_id: str,
-    nickname: str,
-    position: str, 
-    mbti: str = "ไม่ระบุ",
-    bio: Optional[str] = None,
-    contact_email: Optional[str] = None, 
-    points: int = 0,
-    is_admin: bool = False
-) -> None:
-    # ป้องกันเผื่อกรณีผู้ใช้ไม่มีสิทธิ์ Admin
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", ephemeral=True)
-        return
-
-    conn = get_conn()
-    
-    # บันทึกหรืออัปเดตข้อมูล (Upsert)
-    # ใช้ COALESCE สำหรับ bio และ email เพื่อไม่ให้ข้อมูลเก่าหายหากแอดมินไม่ได้กรอกใหม่
-    conn.execute(
-        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(discord_id) DO UPDATE SET
-               emp_id = excluded.emp_id,
-               nickname = excluded.nickname,
-               position = excluded.position,
-               mbti = excluded.mbti,
-               bio = COALESCE(excluded.bio, employees.bio),
-               contact_email = COALESCE(excluded.contact_email, employees.contact_email),
-               points = excluded.points,
-               is_admin = excluded.is_admin""",
-        (str(member.id), emp_id, nickname, position, mbti, bio, contact_email, points, int(is_admin)),
-    )
-    conn.commit()
-    
-    # ดึงข้อมูลล่าสุดกลับมาแสดงผล เพื่อความถูกต้อง
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    conn.close()
-
-    # --- การตกแต่ง Embed ---
-    embed = discord.Embed(
-        title="✨ บันทึกข้อมูลพนักงานสำเร็จ!", 
-        description=f"อัปเดตฐานข้อมูลสำหรับ {member.mention} เรียบร้อยแล้ว",
-        color=0x34D399 # สีเขียว
-    )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    
-    # 👤 หมวดหมู่: ข้อมูลพื้นฐาน
-    embed.add_field(name="📋 รหัสพนักงาน", value=f"`{row['emp_id']}`", inline=True)
-    embed.add_field(name="🏷️ ชื่อเล่น", value=row['nickname'], inline=True)
-    embed.add_field(name="💼 ตำแหน่ง", value=row['position'], inline=True)
-    
-    # 🧠 หมวดหมู่: ข้อมูลส่วนตัวและการติดต่อ
-    embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
-    embed.add_field(name="📧 อีเมล", value=row['contact_email'] or "ไม่ระบุ", inline=True)
-    embed.add_field(name="💰 คะแนนสะสม", value=f"**{row['points']}** pts", inline=True)
-
-    # ⚙️ หมวดหมู่: ระบบ
-    admin_status = "✅ ใช่ (Yes)" if row['is_admin'] else "❌ ไม่ (No)"
-    embed.add_field(name="🛠️ สิทธิ์แอดมินพอร์ทัล", value=admin_status, inline=False)
-    
-    # 📝 ประวัติย่อ (แสดงผลถ้ามีข้อมูล)
-    if row['bio']:
-        embed.add_field(name="📝 ประวัติ (Bio)", value=f"> {row['bio']}", inline=False)
-
-    embed.set_footer(text="Societ Game Studio • Database System")
-
-    await interaction.response.send_message(embed=embed)
 
 
 points_group = app_commands.Group(name="points", description="💠 Employee points system")
