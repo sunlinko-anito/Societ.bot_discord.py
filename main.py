@@ -1131,73 +1131,6 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
 
 
-@bot.tree.command(name="employee_add", description="Add or update an employee in the system")
-@app_commands.describe(
-    member="The Discord member",
-    emp_id="Employee ID (e.g., EMP-001)",
-    nickname="Employee's nickname",
-    position="Job position",
-    mbti="MBTI Personality (Optional)",
-    is_admin="Is this user a portal admin? (True/False)"
-)
-async def employee_add(
-    interaction: discord.Interaction, 
-    member: discord.Member, 
-    emp_id: str, 
-    nickname: str, 
-    position: str, 
-    mbti: str = "Unknown",
-    is_admin: bool = False
-):
-    # Ensure only admins can use this command (Optional but recommended)
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-
-    conn = get_conn()
-    
-    # 1. Upsert into database
-    conn.execute(
-        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, is_admin, points)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(discord_id) DO UPDATE SET
-               emp_id = excluded.emp_id,
-               nickname = excluded.nickname,
-               position = excluded.position,
-               mbti = excluded.mbti,
-               is_admin = excluded.is_admin""",
-        (str(member.id), emp_id, nickname, position, mbti, int(is_admin), 0)
-    )
-    conn.commit()
-    
-    # Fetch current points in case they already existed and had points
-    row = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    current_points = row["points"] if row else 0
-    conn.close()
-
-    # 2. Build the Embed
-    embed = discord.Embed(
-        title="✅ Employee Profile Updated", 
-        description=f"Successfully updated the database for {member.mention}",
-        color=discord.Color.green()
-    )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    
-    embed.add_field(name="Emp ID", value=emp_id, inline=True)
-    embed.add_field(name="Nickname", value=nickname, inline=True)
-    embed.add_field(name="Position", value=position, inline=True)
-    
-    if mbti != "Unknown":
-        embed.add_field(name="MBTI", value=mbti, inline=True)
-        
-    embed.add_field(name="Points", value=str(current_points), inline=True)
-    
-    # Using the inline formatting logic you requested
-
-    embed.add_field(name="Portal admin", value="Yes" if is_admin else "No", inline=True)
-
-    await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
 async def list_employees(interaction: discord.Interaction):
     conn = get_conn()
@@ -1358,41 +1291,89 @@ async def rd_employee(interaction: discord.Interaction, channel: discord.TextCha
     await interaction.followup.send(f"✅ Result posted in {channel.mention}.", ephemeral=True)
 
 
-@bot.tree.command(name="add_employee", description="🗂️ Add or update an operative record (admin only)")
+@bot.tree.command(name="add_employee", description="🗂️ เพิ่มหรืออัปเดตข้อมูลพนักงาน (เฉพาะ Admin)")
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(member="Discord account of the operative", nickname="Display nickname",
-                       position="Role inside the studio", bio="Short biography",
-                       contact_email="Contact email", points="Starting points balance",
-                       is_admin="Grant admin access to the web portal")
-async def add_employee(interaction: discord.Interaction, member: discord.Member, nickname: str,
-                       position: str, bio: Optional[str] = None,
-                       contact_email: Optional[str] = None, points: int = 0,
-                       is_admin: bool = False) -> None:
+@app_commands.describe(
+    member="เลือกบัญชี Discord ของพนักงาน",
+    emp_id="รหัสพนักงาน (เช่น EMP-001)",
+    nickname="ชื่อเล่น (Display nickname)",
+    position="ตำแหน่งในสตูดิโอ",
+    mbti="บุคลิกภาพ MBTI (ไม่บังคับ)",
+    bio="ประวัติย่อ (ไม่บังคับ)",
+    contact_email="อีเมลที่ใช้ติดต่อ (ไม่บังคับ)",
+    points="คะแนนสะสมเริ่มต้น",
+    is_admin="ให้สิทธิ์ Admin ในเว็บพอร์ทัลหรือไม่?"
+)
+async def add_employee(
+    interaction: discord.Interaction, 
+    member: discord.Member, 
+    emp_id: str,
+    nickname: str,
+    position: str, 
+    mbti: str = "ไม่ระบุ",
+    bio: Optional[str] = None,
+    contact_email: Optional[str] = None, 
+    points: int = 0,
+    is_admin: bool = False
+) -> None:
+    # ป้องกันเผื่อกรณีผู้ใช้ไม่มีสิทธิ์ Admin
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", ephemeral=True)
+        return
+
     conn = get_conn()
+    
+    # บันทึกหรืออัปเดตข้อมูล (Upsert)
+    # ใช้ COALESCE สำหรับ bio และ email เพื่อไม่ให้ข้อมูลเก่าหายหากแอดมินไม่ได้กรอกใหม่
     conn.execute(
-        """INSERT INTO employees (discord_id, nickname, position, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(discord_id) DO UPDATE SET
+               emp_id = excluded.emp_id,
                nickname = excluded.nickname,
                position = excluded.position,
+               mbti = excluded.mbti,
                bio = COALESCE(excluded.bio, employees.bio),
                contact_email = COALESCE(excluded.contact_email, employees.contact_email),
                points = excluded.points,
                is_admin = excluded.is_admin""",
-        (str(member.id), nickname, position, bio, contact_email, points, int(is_admin)),
+        (str(member.id), emp_id, nickname, position, mbti, bio, contact_email, points, int(is_admin)),
     )
     conn.commit()
+    
+    # ดึงข้อมูลล่าสุดกลับมาแสดงผล เพื่อความถูกต้อง
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
     conn.close()
 
-    embed = discord.Embed(title="✨ Operative record saved", color=0x34D399)
-    embed.add_field(name="Operative", value=member.mention, inline=False)
-    embed.add_field(name="Nickname", value=nickname, inline=True)
-    embed.add_field(name="Position", value=position, inline=True)
-    embed.add_field(name="Points", value=str(points), inline=True)
-    embed.add_field(name="Portal admin", value="Yes" if is_admin else "No", inline=True)
-    if bio:
-        embed.add_field(name="Bio", value=bio, inline=False)
+    # --- การตกแต่ง Embed ---
+    embed = discord.Embed(
+        title="✨ บันทึกข้อมูลพนักงานสำเร็จ!", 
+        description=f"อัปเดตฐานข้อมูลสำหรับ {member.mention} เรียบร้อยแล้ว",
+        color=0x34D399 # สีเขียว
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    # 👤 หมวดหมู่: ข้อมูลพื้นฐาน
+    embed.add_field(name="📋 รหัสพนักงาน", value=f"`{row['emp_id']}`", inline=True)
+    embed.add_field(name="🏷️ ชื่อเล่น", value=row['nickname'], inline=True)
+    embed.add_field(name="💼 ตำแหน่ง", value=row['position'], inline=True)
+    
+    # 🧠 หมวดหมู่: ข้อมูลส่วนตัวและการติดต่อ
+    embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
+    embed.add_field(name="📧 อีเมล", value=row['contact_email'] or "ไม่ระบุ", inline=True)
+    embed.add_field(name="💰 คะแนนสะสม", value=f"**{row['points']}** pts", inline=True)
+
+    # ⚙️ หมวดหมู่: ระบบ
+    admin_status = "✅ ใช่ (Yes)" if row['is_admin'] else "❌ ไม่ (No)"
+    embed.add_field(name="🛠️ สิทธิ์แอดมินพอร์ทัล", value=admin_status, inline=False)
+    
+    # 📝 ประวัติย่อ (แสดงผลถ้ามีข้อมูล)
+    if row['bio']:
+        embed.add_field(name="📝 ประวัติ (Bio)", value=f"> {row['bio']}", inline=False)
+
+    embed.set_footer(text="Societ Game Studio • Database System")
+
     await interaction.response.send_message(embed=embed)
 
 
