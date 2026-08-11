@@ -693,6 +693,224 @@ def is_admin_user(discord_id: int) -> bool:
     return bool(row and row["is_admin"])
 
 
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="test_welcome", description="🧪 ทดสอบส่งการ์ดต้อนรับสมาชิกใหม่")
+async def test_welcome(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row and row[0]:
+        channel = interaction.guild.get_channel(row[0])
+        if channel:
+            embed = discord.Embed(
+                title="🎉 [TEST] ยินดีต้อนรับ! 🎉", 
+                description=f"ยินดีต้อนรับ {interaction.user.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!", 
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+            await channel.send(embed=embed)
+            await interaction.followup.send("✅ ส่งข้อความทดสอบต้อนรับไปที่ห้องแล้ว!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ หาห้องต้อนรับไม่เจอ (ห้องนั้นอาจถูกลบไปแล้ว)", ephemeral=True)
+    else:
+        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้องต้อนรับ กรุณาใช้ `/setup_systems` เพื่อตั้งค่าก่อน", ephemeral=True)
+
+
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ (เข้าห้องที่ตั้งค่าไว้)")
+async def test_log(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row and row[0]:
+        log_channel = interaction.guild.get_channel(row[0])
+        if log_channel:
+            embed = discord.Embed(title="🗑️ [TEST LOG] ข้อความถูกลบ", color=discord.Color.red(), timestamp=interaction.created_at)
+            embed.add_field(name="คนพิมพ์", value=interaction.user.mention)
+            embed.add_field(name="ช่อง", value=interaction.channel.mention)
+            embed.add_field(name="ข้อความที่ลบ", value="นี่คือข้อความสมมุติสำหรับทดสอบระบบ Log", inline=False)
+            await log_channel.send(embed=embed)
+            await interaction.followup.send("✅ ส่ง Log ทดสอบไปที่ห้องแล้ว!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ หาห้อง Log ไม่เจอ (อาจจะลบห้องนั้นไปแล้ว)", ephemeral=True)
+    else:
+        await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าห้อง Log ใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
+
+
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="setup_systems", description="ตั้งค่าห้องต่าง ๆ ของทั้ง 3 ระบบ")
+async def setup_systems(
+    interaction: discord.Interaction,
+    welcome_channel: discord.TextChannel = None,
+    log_channel: discord.TextChannel = None,
+    voice_master_channel: discord.VoiceChannel = None,
+    voice_category: discord.CategoryChannel = None
+):
+    guild_id = interaction.guild.id
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT guild_id FROM settings WHERE guild_id = ?", (guild_id,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO settings (guild_id) VALUES (?)", (guild_id,))
+        conn.commit()
+
+    if welcome_channel:
+        cursor.execute("UPDATE settings SET welcome_channel_id = ? WHERE guild_id = ?", (welcome_channel.id, guild_id))
+    if log_channel:
+        cursor.execute("UPDATE settings SET log_channel_id = ? WHERE guild_id = ?", (log_channel.id, guild_id))
+    if voice_master_channel:
+        cursor.execute("UPDATE settings SET voice_master_id = ? WHERE guild_id = ?", (voice_master_channel.id, guild_id))
+    if voice_category:
+        cursor.execute("UPDATE settings SET voice_category_id = ? WHERE guild_id = ?", (voice_category.id, guild_id))
+
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบแล้ว!", ephemeral=True)
+
+
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+@bot.tree.command(name="send_ticket_button", description="ส่งปุ่มกดสร้าง Ticket")
+async def send_ticket_button(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📞 Support Ticket",
+        description="แจ้งปัญหากับ director หรือถามเกี่ยวกับงานของตัวเอง",
+        color=discord.Color.gold()
+    )
+    await interaction.response.send_message("ส่งแผงควบคุมสำเร็จ", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=TicketPersistentView())
+
+
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+@bot.tree.command(name="meeting", description="สร้างนัดหมายการประชุมและบันทึกลงฐานข้อมูล")
+@app_commands.describe(
+    topic="หัวข้อการประชุม",
+    date_str="วันที่ประชุม (รูปแบบ วว/ดด/ปปปป เช่น 25/06/2026)",
+    time_str="เวลาประชุม (รูปแบบ ชช:นน เช่น 14:30)",
+    channel="ช่องที่ต้องการให้ส่งข้อความแจ้งเตือน",
+    mention_target="บทบาท (Role) หรือผู้ใช้ที่จะแท็กเข้าประชุม"
+)
+async def meeting(
+    interaction: discord.Interaction, 
+    topic: str, 
+    date_str: str, 
+    time_str: str, 
+    channel: discord.TextChannel, 
+    mention_target: discord.Role | discord.Member
+):
+    try:
+        input_time = datetime.datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M")
+        now = datetime.datetime.now(ZoneInfo("Asia/Bangkok")).replace(tzinfo=None)
+
+        if input_time <= now:
+            await interaction.response.send_message("❌ ไม่สามารถนัดหมายเวลาในอดีตได้ครับ กรุณาระบุเวลาใหม่", ephemeral=True)
+            return
+
+        save_time_str = input_time.strftime("%Y-%m-%d %H:%M")
+
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO schedules (topic, meeting_time, channel_id, mention_id) VALUES (?, ?, ?, ?)",
+            (topic, save_time_str, channel.id, mention_target.id)
+        )
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="💾 บันทึกการนัดหมายประชุมสำเร็จ", 
+            color=discord.Color.green(),
+            timestamp=datetime.datetime.now()
+        )
+        embed.add_field(name="📌 หัวข้อ", value=topic, inline=False)
+        embed.add_field(name="📆 วันเวลา", value=f"{date_str} เวลา {time_str} น.", inline=True)
+        embed.add_field(name="📢 ช่องแจ้งเตือน", value=channel.mention, inline=True)
+        embed.add_field(name="👥 ผู้เข้าร่วม", value=mention_target.mention, inline=False)
+        embed.set_footer(text="ระบบบันทึกลงข้อมูลระยะยาวเรียบร้อย")
+
+        await interaction.response.send_message(embed=embed)
+
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ กรอกรูปแบบวันเวลาผิด! ตัวอย่างที่ถูกต้อง: วันที่ `25/06/2026` และ เวลา `14:30`", 
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="meeting_list", description="ดูรายการนัดหมายประชุมทั้งหมด")
+async def meeting_list(interaction: discord.Interaction):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, topic, meeting_time FROM schedules WHERE is_done = 0")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="📋 รายการนัดหมายทั้งหมด", color=discord.Color.orange())
+    for row in rows:
+        db_id, topic, m_time = row
+        embed.add_field(
+            name=f"🆔 ID: {db_id} | {topic}", 
+            value=f"⏰ เวลา: {m_time}", 
+            inline=False
+        )
+    await interaction.response.send_message(embed=embed)
+
+
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="meeting_delete", description="ลบนัดหมายที่ทำผิด โดยใช้ ID")
+@app_commands.describe(db_id="เลข ID ของนัดหมายที่ต้องการลบ (ดูได้จาก /meeting_list)")
+async def meeting_delete(interaction: discord.Interaction, db_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT topic FROM schedules WHERE id = ? AND is_done = 0", (db_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        await interaction.response.send_message(f"❌ ไม่พบนัดหมายรหัส ID: {db_id} หรือนัดหมายนั้นทำงานไปแล้ว", ephemeral=True)
+        conn.close()
+        return
+
+    cursor.execute("DELETE FROM schedules WHERE id = ?", (db_id,))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
+
+
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="add_employee", description="เพิ่มข้อมูลหรือแก้ไขข้อมูลพนักงาน")
+@app_commands.describe(
+    member="เลือกบัญชี Discord ของพนักงาน",
+    emp_id="รหัสพนักงาน",
+    nickname="ชื่อเล่น",
+    position="ตำแหน่งหน้าที่",
+    mbti="MBTI (เช่น INTJ, ENTJ)"
+)
+
+
 @bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
 async def list_employees(interaction: discord.Interaction):
     conn = sqlite3.connect(DB_NAME)
