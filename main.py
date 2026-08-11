@@ -160,6 +160,183 @@ def init_db() -> None:
     print("[Database] Tables ready in", DB_NAME)
 
 
+@bot.event
+async def on_member_join(member):
+    """เมื่อมีคนเข้าเซิร์ฟเวอร์"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (member.guild.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row and row[0]:
+        channel = member.guild.get_channel(row[0])
+        if channel:
+            embed = discord.Embed(
+                title=f"🎉 ยินดีต้อนรับ! 🎉",
+                description=f"ยินดีต้อนรับ {member.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await channel.send(embed=embed)
+
+@bot.event
+async def on_message_delete(message):
+    """Log เมื่อมีคนลบข้อความ"""
+    if message.author.bot: return
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (message.guild.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row and row[0]:
+        log_channel = message.guild.get_channel(row[0])
+        if log_channel:
+            embed = discord.Embed(title="🗑️ ข้อความถูกลบ", color=discord.Color.red(), timestamp=message.created_at)
+            embed.add_field(name="คนพิมพ์", value=message.author.mention)
+            embed.add_field(name="ช่อง", value=message.channel.mention)
+            embed.add_field(name="ข้อความที่ลบ", value=message.content or "[ไม่มีข้อความตัวอักษร]", inline=False)
+            await log_channel.send(embed=embed)
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """ตรวจจับการเข้า-ออกห้องเสียง"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT voice_master_id, voice_category_id FROM settings WHERE guild_id = ?", (member.guild.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row: return
+    master_id, category_id = row
+
+    # กรณีที่ 1: สมาชิกกดเข้า "ห้องสร้างห้องหลัก"
+    if after.channel and after.channel.id == master_id:
+        category = member.guild.get_channel(category_id) if category_id else None
+
+        # สร้างห้องเสียงใหม่ โดยตั้งชื่อตามคนกดเข้า
+        new_channel = await member.guild.create_voice_channel(
+            name=f"💻│ ห้องทำงานของ {member.display_name}",
+            category=category
+        )
+        # ย้ายสมาชิกลงห้องใหม่ทันที
+        await member.move_to(new_channel)
+
+    # กรณีที่ 2: สมาชิกย้ายออกหรือวางสาย เช็คว่าห้องชั่วคราวว่างไหม ถ้าว่างให้ลบทิ้ง
+    if before.channel and before.channel.id != master_id:
+        # เพิ่มการเช็คชื่อห้องก่อนลบ: ต้องอยู่ใน Category เดียวกัน, ชื่อขึ้นต้นด้วย '💻│' และไม่มีคนอยู่
+        if before.channel.category_id == category_id and before.channel.name.startswith("💻│") and len(before.channel.members) == 0:
+            try:
+                await before.channel.delete()
+            except Exception as e:
+                print(f"❌ ไม่สามารถลบห้องเสียงได้: {e}")
+
+class TicketPersistentView(discord.ui.View):
+    """สร้างปุ่มเปิดตั๋วถาวร"""
+    def __init__(self):
+        super().__init__(timeout=None) 
+
+    @discord.ui.button(label="📩 เปิด Ticket แจ้งปัญหา", style=discord.ButtonStyle.primary, custom_id="press_open_ticket")
+    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        user = interaction.user
+
+        await interaction.response.defer(ephemeral=True)
+
+        # ตั้งสิทธิ์ห้องแชทลับ (แอดมินเห็น, คนเปิดเห็น, คนอื่นห้ามเห็น)
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        ticket_channel = await guild.create_text_channel(
+            name=f"ticket-{(user.name).lower()}",
+            overwrites=overwrites
+        )
+
+        # บันทึกข้อมูลลงฐานข้อมูล
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO tickets (ticket_channel_id, user_id) VALUES (?, ?)", (ticket_channel.id, user.id))
+        conn.commit()
+        conn.close()
+
+        # ส่งข้อความควบคุมในตั๋วพร้อมปุ่มปิด
+        embed = discord.Embed(
+            title="🎫 Ticket ติดต่อแอดมิน",
+            description=f" {user.mention} พิมพ์รายละเอียดปัญหาหรือเรื่องที่ต้องการสอบถามไว้ได้เลย\nแอดมินจะมาตรวจสอบให้ในไม่ช้า",
+            color=discord.Color.blue()
+        )
+        await ticket_channel.send(embed=embed, view=TicketCloseView())
+        await interaction.followup.send(f"✅ เปิดตั๋วเรียบร้อยแล้วที่ห้อง {ticket_channel.mention} ", ephemeral=True)
+
+class TicketCloseView(discord.ui.View):
+    """ปุ่มสำหรับกดปิดตั๋วในห้องคุยลับ"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 ปิด Ticket", style=discord.ButtonStyle.danger, custom_id="press_close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("กำลังปิดและลบห้องนี้ใน 5 วินาที...")
+
+        # ลบข้อมูลออกจากดาต้าเบส
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tickets WHERE ticket_channel_id = ?", (interaction.channel.id,))
+        conn.commit()
+        conn.close()
+
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
+
+@tasks.loop(seconds=30)
+async def check_meetings():
+    now = datetime.datetime.now()
+    now_tz = now.astimezone(ZoneInfo("Asia/Bangkok"))
+    now_str = now_tz.strftime("%Y-%m-%d %H:%M")
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # ค้นหาการประชุมที่ถึงเวลาแล้วและยังไม่ได้ทำการแจ้งเตือน (is_done = 0)
+    cursor.execute(
+        "SELECT id, topic, channel_id, mention_id FROM schedules WHERE meeting_time <= ? AND is_done = 0", 
+        (now_str,)
+    )
+    meetings = cursor.fetchall()
+
+    for meeting in meetings:
+        db_id, topic, channel_id, mention_id = meeting
+        channel = bot.get_channel(channel_id)
+
+        if channel:
+            alert_embed = discord.Embed(
+                title="🚨 ได้เวลาประชุมแล้ว! 🚨",
+                description=f"ขณะนี้ถึงเวลานัดหมายการประชุมที่บันทึกไว้ในระบบแล้ว\n\n**📌 หัวข้อการประชุม:** {topic}",
+                color=discord.Color.red(),
+                timestamp=datetime.datetime.now()
+            )
+
+            # [แก้ไขจุดที่ 3] ดึงข้อมูล Role จากกิลด์ของแชนแนลโดยตรง ป้องกันข้อผิดพลาดในเคสที่บอทยังโหลดข้อมูลกิลด์สากลไม่เสร็จ
+            mention_text = f"<@&{mention_id}>" if channel.guild.get_role(mention_id) else f"<@{mention_id}>"
+
+            try:
+                await channel.send(content=mention_text, embed=alert_embed)
+            except Exception as e:
+                print(f"❌ ไม่สามารถส่งข้อความแจ้งเตือนได้: {e}")
+
+        # อัปเดตสถานะในฐานข้อมูลว่าแจ้งเตือนแล้ว เพื่อไม่ให้บอทส่งซ้ำ
+        cursor.execute("UPDATE schedules SET is_done = 1 WHERE id = ?", (db_id,))
+
+    conn.commit()
+    conn.close()
+
+
+
 def fetch_employee(discord_id: str) -> Optional[sqlite3.Row]:
     conn = get_conn()
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(discord_id),)).fetchone()
