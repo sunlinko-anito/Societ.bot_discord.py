@@ -54,6 +54,8 @@ DISCORD_API = "https://discord.com/api/v10"
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.voice_states = True
+
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -1132,32 +1134,33 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     position="ตำแหน่งหน้าที่",
     mbti="MBTI (เช่น INTJ, ENTJ)"
 )
-
-
-@bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
-async def list_employees(interaction: discord.Interaction):
+async def add_employee(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    emp_id: str,
+    nickname: str,
+    position: str,
+    mbti: str
+):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees")
-    rows = cursor.fetchall()
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO employees (discord_id, emp_id, nickname, position, mbti)
+        VALUES (?, ?, ?, ?, ?)
+    """, (member.id, emp_id, nickname, position, mbti.upper()))
+
+    conn.commit()
     conn.close()
 
-    if not rows:
-        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบ", ephemeral=True)
-        return
-
-    embed = discord.Embed(title="👥 รายชื่อพนักงานทั้งหมดในระบบ", color=discord.Color.purple())
-
-    for row in rows:
-        discord_id, emp_id, nickname, position, mbti = row
-        embed.add_field(
-            name=f"⭐ [{emp_id}] {nickname}",
-            value=f"**ตำแหน่ง:** {position} | **MBTI:** {mbti}\n**บัญชี Discord:** <@{discord_id}>",
-            inline=False
-        )
+    embed = discord.Embed(title="✨ บันทึกข้อมูลพนักงานสำเร็จ", color=discord.Color.green())
+    embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
+    embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
+    embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
+    embed.add_field(name="🧠 MBTI", value=mbti.upper(), inline=True)
+    embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
 
     await interaction.response.send_message(embed=embed)
-
 
 @bot.tree.command(name="view_employee", description="ดูข้อมูลพนักงานเฉพาะบุคคล")
 @app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการดูข้อมูล")
