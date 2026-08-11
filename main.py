@@ -74,21 +74,6 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     """Create every table used by the bot and the web API."""
     conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS employees (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            discord_id TEXT UNIQUE NOT NULL,
-            nickname TEXT NOT NULL,
-            position TEXT NOT NULL,
-            bio TEXT,
-            contact_email TEXT,
-            points INTEGER DEFAULT 0,
-            is_admin INTEGER DEFAULT 0
-        )
-    """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,16 +121,22 @@ def init_db() -> None:
         )
     """)
 
-    # บังคับสร้างตาราง Employees
+    # Inside init_db()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS employees (
-           discord_id INTEGER PRIMARY KEY,
-           emp_id TEXT NOT NULL,
-           nickname TEXT,
-           position TEXT,
-           mbti TEXT
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            discord_id TEXT UNIQUE NOT NULL,
+            emp_id TEXT,
+            nickname TEXT NOT NULL,
+            position TEXT NOT NULL,
+            mbti TEXT,
+            bio TEXT,
+            contact_email TEXT,
+            points INTEGER DEFAULT 0,
+            is_admin INTEGER DEFAULT 0
         )
     """)
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             guild_id INTEGER PRIMARY KEY,
@@ -683,28 +674,39 @@ async def admin_upsert_employee(request: web.Request) -> web.StreamResponse:
     discord_id = str(body.get("discord_id", "")).strip()
     nickname = (body.get("nickname") or "").strip()
     position = (body.get("position") or "").strip()
+    
     if not discord_id or not nickname or not position:
         return web.json_response({"error": "discord_id_nickname_position_required"}, status=400)
 
     conn = get_conn()
     conn.execute(
-        """INSERT INTO employees (discord_id, nickname, position, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(discord_id) DO UPDATE SET
+               emp_id = excluded.emp_id,
                nickname = excluded.nickname,
                position = excluded.position,
+               mbti = excluded.mbti,
                bio = excluded.bio,
                contact_email = excluded.contact_email,
                points = excluded.points,
                is_admin = excluded.is_admin""",
-        (discord_id, nickname, position, body.get("bio"), body.get("contact_email"),
-         int(body.get("points") or 0), int(bool(body.get("is_admin")))),
+        (
+            discord_id, 
+            body.get("emp_id"), 
+            nickname, 
+            position, 
+            body.get("mbti"), 
+            body.get("bio"), 
+            body.get("contact_email"),
+            int(body.get("points") or 0), 
+            int(bool(body.get("is_admin")))
+        ),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
     conn.close()
     return web.json_response(employee_public(row))
-
 
 @require_admin
 async def admin_delete_employee(request: web.Request) -> web.StreamResponse:
@@ -1124,86 +1126,177 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
 
 
-@app_commands.default_permissions(administrator=True)
-@app_commands.checks.has_permissions(administrator=True)
-@bot.tree.command(name="add_employee", description="เพิ่มข้อมูลหรือแก้ไขข้อมูลพนักงาน")
+@bot.tree.command(name="employee_add", description="Add or update an employee in the system")
 @app_commands.describe(
-    member="เลือกบัญชี Discord ของพนักงาน",
-    emp_id="รหัสพนักงาน",
-    nickname="ชื่อเล่น",
-    position="ตำแหน่งหน้าที่",
-    mbti="MBTI (เช่น INTJ, ENTJ)"
+    member="The Discord member",
+    emp_id="Employee ID (e.g., EMP-001)",
+    nickname="Employee's nickname",
+    position="Job position",
+    mbti="MBTI Personality (Optional)",
+    is_admin="Is this user a portal admin? (True/False)"
 )
-async def add_employee(
-    interaction: discord.Interaction,
-    member: discord.Member,
-    emp_id: str,
-    nickname: str,
-    position: str,
-    mbti: str
+async def employee_add(
+    interaction: discord.Interaction, 
+    member: discord.Member, 
+    emp_id: str, 
+    nickname: str, 
+    position: str, 
+    mbti: str = "Unknown",
+    is_admin: bool = False
 ):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    # Ensure only admins can use this command (Optional but recommended)
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
 
-    cursor.execute("""
-        INSERT OR REPLACE INTO employees (discord_id, emp_id, nickname, position, mbti)
-        VALUES (?, ?, ?, ?, ?)
-    """, (member.id, emp_id, nickname, position, mbti.upper()))
-
+    conn = get_conn()
+    
+    # 1. Upsert into database
+    conn.execute(
+        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, is_admin, points)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(discord_id) DO UPDATE SET
+               emp_id = excluded.emp_id,
+               nickname = excluded.nickname,
+               position = excluded.position,
+               mbti = excluded.mbti,
+               is_admin = excluded.is_admin""",
+        (str(member.id), emp_id, nickname, position, mbti, int(is_admin), 0)
+    )
     conn.commit()
+    
+    # Fetch current points in case they already existed and had points
+    row = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    current_points = row["points"] if row else 0
     conn.close()
 
-    embed = discord.Embed(title="✨ บันทึกข้อมูลพนักงานสำเร็จ", color=discord.Color.green())
-    embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
-    embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
-    embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
-    embed.add_field(name="🧠 MBTI", value=mbti.upper(), inline=True)
-    embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
+    # 2. Build the Embed
+    embed = discord.Embed(
+        title="✅ Employee Profile Updated", 
+        description=f"Successfully updated the database for {member.mention}",
+        color=discord.Color.green()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    embed.add_field(name="Emp ID", value=emp_id, inline=True)
+    embed.add_field(name="Nickname", value=nickname, inline=True)
+    embed.add_field(name="Position", value=position, inline=True)
+    
+    if mbti != "Unknown":
+        embed.add_field(name="MBTI", value=mbti, inline=True)
+        
+    embed.add_field(name="Points", value=str(current_points), inline=True)
+    
+    # Using the inline formatting logic you requested
+    embed.add_field(name="Portal admin", value="Yes" if is_admin else "No", inline=True)
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="view_employee", description="ดูข้อมูลพนักงานเฉพาะบุคคล")
-@app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการดูข้อมูล")
-async def view_employee(interaction: discord.Interaction, member: discord.Member):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT emp_id, nickname, position, mbti FROM employees WHERE discord_id = ?", (member.id,))
-    row = cursor.fetchone()
+@bot.tree.command(name="list_employees", description="ดูรายชื่อและข้อมูลพนักงานทั้งหมดในระบบ")
+async def list_employees(interaction: discord.Interaction):
+    conn = get_conn()
+    rows = conn.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees").fetchall()
     conn.close()
 
-    if row:
-        emp_id, nickname, position, mbti = row
-        embed = discord.Embed(title=f"🔎 ข้อมูลพนักงาน: {nickname}", color=discord.Color.blue())
-        embed.add_field(name="💳 รหัสพนักงาน", value=emp_id, inline=True)
-        embed.add_field(name="👤 ชื่อเล่น", value=nickname, inline=True)
-        embed.add_field(name="💼 ตำแหน่งหน้าที่", value=position, inline=True)
-        embed.add_field(name="🧠 MBTI", value=mbti, inline=True)
-        embed.add_field(name="🌐 บัญชี Discord", value=member.mention, inline=False)
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานของ {member.mention} ในระบบ", ephemeral=True)
+    if not rows:
+        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบ", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="👥 รายชื่อพนักงานทั้งหมดในระบบ", color=discord.Color.purple())
+
+    for row in rows:
+        # ใช้ key access เพราะ get_conn() คืนค่าเป็น sqlite3.Row
+        discord_id = row["discord_id"]
+        emp_id = row["emp_id"] or "N/A"
+        nickname = row["nickname"]
+        position = row["position"]
+        mbti = row["mbti"] or "N/A"
+        
+        embed.add_field(
+            name=f"⭐ [{emp_id}] {nickname}",
+            value=f"**ตำแหน่ง:** {position} | **MBTI:** {mbti}\n**บัญชี Discord:** <@{discord_id}>",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed)
 
 
-@app_commands.default_permissions(administrator=True)
-@bot.tree.command(name="delete_employee", description="ลบข้อมูลพนักงานออกจากระบบ")
-@app_commands.describe(member="เลือกบัญชี Discord ของพนักงานที่ต้องการลบ")
+@bot.tree.command(name="view_employee", description="ดูข้อมูลโปรไฟล์ของพนักงานที่ระบุ")
+@app_commands.describe(member="เลือกพนักงานที่ต้องการดูข้อมูล")
+async def view_employee(interaction: discord.Interaction, member: discord.Member):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    conn.close()
+
+    if not row:
+        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=f"📋 โปรไฟล์พนักงาน: {row['nickname']}",
+        color=discord.Color.blue()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    embed.add_field(name="รหัสพนักงาน", value=row["emp_id"] or "N/A", inline=True)
+    embed.add_field(name="ชื่อเล่น", value=row["nickname"], inline=True)
+    embed.add_field(name="ตำแหน่ง", value=row["position"], inline=True)
+    embed.add_field(name="MBTI", value=row["mbti"] or "N/A", inline=True)
+    embed.add_field(name="คะแนนสะสม (Points)", value=str(row["points"]), inline=True)
+    embed.add_field(name="ผู้ดูแลระบบ (Admin)", value="Yes" if row["is_admin"] else "No", inline=True)
+
+    if row["bio"]:
+        embed.add_field(name="ประวัติ (Bio)", value=row["bio"], inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="delete_employee", description="ลบพนักงานออกจากระบบ (เฉพาะ Admin)")
+@app_commands.describe(member="เลือกพนักงานที่ต้องการลบ")
 async def delete_employee(interaction: discord.Interaction, member: discord.Member):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", ephemeral=True)
+        return
 
-    cursor.execute("SELECT nickname FROM employees WHERE discord_id = ?", (member.id,))
-    row = cursor.fetchone()
-
-    if row:
-        nickname = row[0]
-        cursor.execute("DELETE FROM employees WHERE discord_id = ?", (member.id,))
-        conn.commit()
-        conn.close()
-
-        await interaction.response.send_message(f"🗑️ ลบข้อมูลของ **{nickname}** ({member.mention}) ออกจากระบบแล้ว")
-    else:
+    conn = get_conn()
+    row = conn.execute("SELECT nickname FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    
+    if not row:
         conn.close()
         await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในระบบ", ephemeral=True)
+        return
+
+    conn.execute("DELETE FROM employees WHERE discord_id = ?", (str(member.id),))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"🗑️ ลบข้อมูลพนักงานของ {member.mention} ออกจากระบบเรียบร้อยแล้ว")
+
+
+@bot.tree.command(name="rd_employee", description="สุ่มเลือกพนักงาน 1 คนจากระบบ")
+async def rd_employee(interaction: discord.Interaction):
+    conn = get_conn()
+    # ใช้ ORDER BY RANDOM() ของ SQLite เพื่อสุ่ม
+    row = conn.execute("SELECT * FROM employees ORDER BY RANDOM() LIMIT 1").fetchone()
+    conn.close()
+
+    if not row:
+        await interaction.response.send_message("📭 ยังไม่มีข้อมูลพนักงานในระบบให้สุ่ม", ephemeral=True)
+        return
+
+    discord_id = row["discord_id"]
+    emp_id = row["emp_id"] or "N/A"
+    
+    embed = discord.Embed(
+        title="🎲 สุ่มพนักงานผู้โชคดี!",
+        description=f"ยินดีด้วย! <@{discord_id}> ได้รับการสุ่มเลือก",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="รหัสพนักงาน", value=emp_id, inline=True)
+    embed.add_field(name="ชื่อเล่น", value=row["nickname"], inline=True)
+    embed.add_field(name="ตำแหน่ง", value=row["position"], inline=True)
+
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.event
