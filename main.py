@@ -512,9 +512,16 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         "avatar_url": avatar_url,
         "exp": int(time.time()) + SESSION_TTL,
     }
+   # มองหาบรรทัดที่สั่ง set_cookie ใน auth_callback
     response = web.HTTPFound("/")
-    response.set_cookie(SESSION_COOKIE, sign_session(payload), max_age=SESSION_TTL,
-                        httponly=True, samesite="Lax")
+    response.set_cookie(
+        SESSION_COOKIE,
+        sign_session(payload),
+        max_age=SESSION_TTL,
+        httponly=True,
+        samesite="None",
+        secure=True
+    )
     response.del_cookie("societ_oauth_state")
     raise response
 
