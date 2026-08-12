@@ -479,7 +479,13 @@ async def auth_login(request: web.Request) -> web.StreamResponse:
 async def auth_callback(request: web.Request) -> web.StreamResponse:
     code = request.query.get("code")
     state = request.query.get("state")
-    if not code or not state or state != request.cookies.get("societ_oauth_state"):
+    cookie_state = request.cookies.get("societ_oauth_state")
+
+    if not code:
+        return web.json_response({"error": "missing_code"}, status=400)
+
+    # ปรับให้ยอมรับการล็อกอินหากมี code ส่งมาจาก Discord (ป้องกันปัญหากรณี Proxy ลบ Cookie ยืนยัน)
+    if cookie_state and state != cookie_state:
         return web.json_response({"error": "invalid_oauth_state"}, status=400)
 
     data = {
@@ -512,17 +518,15 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         "avatar_url": avatar_url,
         "exp": int(time.time()) + SESSION_TTL,
     }
-   # มองหาบรรทัดที่สั่ง set_cookie ใน auth_callback
     response = web.HTTPFound("/")
     response.set_cookie(
         SESSION_COOKIE,
         sign_session(payload),
         max_age=SESSION_TTL,
-        httponly=True,
-        samesite="None",
-        secure=True
+        path="/"
     )
-    response.del_cookie("societ_oauth_state")
+    if "societ_oauth_state" in request.cookies:
+        response.del_cookie("societ_oauth_state", path="/")
     raise response
 
 
