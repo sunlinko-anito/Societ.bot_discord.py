@@ -45,7 +45,7 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 SESSION_COOKIE = "societ_session"
 SESSION_TTL = 60 * 60 * 24 * 7
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
-WEB_PORT = int(os.getenv("PORT", "5000"))
+WEB_PORT = int(os.getenv("PORT", "13660"))
 
 DISCORD_API = "https://discord.com/api/v10"
 
