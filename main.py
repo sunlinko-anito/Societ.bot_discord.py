@@ -464,7 +464,15 @@ async def auth_login(request: web.Request) -> web.StreamResponse:
         "prompt": "consent",
     }
     response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
-    response.set_cookie("societ_oauth_state", state, max_age=600, httponly=True, samesite="Lax")
+    # เพิ่ม secure=True และตั้งค่า cookie ให้รองรับ HTTPS
+    response.set_cookie(
+        "societ_oauth_state", 
+        state, 
+        max_age=600, 
+        httponly=True, 
+        samesite="Lax",
+        secure=True
+    )
     raise response
 
 
