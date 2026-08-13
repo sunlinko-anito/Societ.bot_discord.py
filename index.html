@@ -94,7 +94,7 @@
   <nav class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
     <a href="#origins" class="flex items-center gap-3 shrink-0">
       <img src="assets/IMG_20260719_104125.png" alt="Societ logo"
-           class="h-10 w-10 rounded-full object-cover pulse-glow-soft" />
+           class="h-10 w-10 rounded-full object-cover pulse-glow-soft" onError="this.src='https://via.placeholder.com/40'" />
       <span class="font-display text-2xl font-bold gradient-text">SOCIET</span>
     </a>
 
@@ -422,7 +422,7 @@ async function loadSession() {
   }
 
   if (authed) {
-    $('#points-balance').textContent = me.employee.points;
+    $('#points-balance').textContent = me.employee?.points || 0;
     await Promise.all([loadStore(), loadMyTransactions()]);
   }
   if (role === 'admin') await loadAdminPanels();
@@ -558,7 +558,7 @@ async function loadMyTransactions() {
 
 /* ------------------------------------------------------------------ PROFILE */
 $('#edit-profile-btn').addEventListener('click', () => {
-  const emp = state.user.employee;
+  const emp = state.user.employee || {};
   const form = $('#profile-form');
   form.nickname.value = emp.nickname || '';
   form.position.value = emp.position || '';
@@ -579,7 +579,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
       bio: form.bio.value
     })
   });
-  state.user.employee = updated;
+  if (state.user) state.user.employee = updated;
   $('#user-name').textContent = updated.nickname;
   closeModal('profile-modal');
   await loadRoster();
