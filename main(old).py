@@ -2,7 +2,10 @@
 
 Runs a discord.py bot and an aiohttp web server in the same event loop:
 
-* Slash commands: /test, /work, /rd_employee, /add_employee, /points check|give
+* Slash commands: /test_welcome, /test_log, /setup_systems, /send_ticket_button,
+                 /meeting, /meeting_list, /meeting_delete, /add_employee, 
+                 /list_employees, /view_employee, /delete_employee, /rd_employee,
+                 /work, /points_give
 * REST API for the web frontend (roster, portfolio, store, redemptions)
 * Discord OAuth2 login with signed-cookie sessions and RBAC (guest/employee/admin)
 * SQLite3 persistence in database.db
@@ -10,6 +13,7 @@ Runs a discord.py bot and an aiohttp web server in the same event loop:
 
 import asyncio
 import base64
+import datetime
 import hashlib
 import hmac
 import json
@@ -21,19 +25,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import discord
 from aiohttp import web
 from discord import app_commands
-from discord.ext import commands
-import numpy as np 
-import datetime
-from zoneinfo import ZoneInfo
 from discord.ext import commands, tasks
-from discord import app_commands
-
-
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_NAME = os.getenv("SOCIET_DB", str(BASE_DIR / "database.db"))
@@ -47,7 +45,7 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 SESSION_COOKIE = "societ_session"
 SESSION_TTL = 60 * 60 * 24 * 7
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
-WEB_PORT = int(os.getenv("PORT", "5000"))
+WEB_PORT = int(os.getenv("PORT", "13660"))
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -55,7 +53,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
-
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -122,7 +119,6 @@ def init_db() -> None:
         )
     """)
 
-    # Inside init_db()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS employees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,7 +143,7 @@ def init_db() -> None:
             voice_category_id INTEGER
         )
     """)
-    # ตารางเก็บข้อมูลห้องตั๋ว (Ticket) ที่กำลังเปิดอยู่
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             ticket_channel_id INTEGER PRIMARY KEY,
@@ -161,38 +157,44 @@ def init_db() -> None:
     print("[Database] Tables ready in", DB_NAME)
 
 
+# --------------------------------------------------------------------------------------
+# DISCORD EVENTS
+# --------------------------------------------------------------------------------------
+
 @bot.event
 async def on_member_join(member):
     """เมื่อมีคนเข้าเซิร์ฟเวอร์"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (member.guild.id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row and row[0]:
-        channel = member.guild.get_channel(row[0])
+    if row and row["welcome_channel_id"]:
+        channel = member.guild.get_channel(row["welcome_channel_id"])
         if channel:
             embed = discord.Embed(
-                title=f"🎉 ยินดีต้อนรับ! 🎉",
+                title="🎉 ยินดีต้อนรับ! 🎉",
                 description=f"ยินดีต้อนรับ {member.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!",
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
             await channel.send(embed=embed)
 
+
 @bot.event
 async def on_message_delete(message):
     """Log เมื่อมีคนลบข้อความ"""
-    if message.author.bot: return
-    conn = sqlite3.connect(DB_NAME)
+    if message.author.bot or not message.guild:
+        return
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (message.guild.id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row and row[0]:
-        log_channel = message.guild.get_channel(row[0])
+    if row and row["log_channel_id"]:
+        log_channel = message.guild.get_channel(row["log_channel_id"])
         if log_channel:
             embed = discord.Embed(title="🗑️ ข้อความถูกลบ", color=discord.Color.red(), timestamp=message.created_at)
             embed.add_field(name="คนพิมพ์", value=message.author.mention)
@@ -204,38 +206,40 @@ async def on_message_delete(message):
 @bot.event
 async def on_voice_state_update(member, before, after):
     """ตรวจจับการเข้า-ออกห้องเสียง"""
-    conn = sqlite3.connect(DB_NAME)
+    if not member.guild:
+        return
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT voice_master_id, voice_category_id FROM settings WHERE guild_id = ?", (member.guild.id,))
     row = cursor.fetchone()
     conn.close()
 
-    if not row: return
-    master_id, category_id = row
+    if not row:
+        return
+    master_id, category_id = row["voice_master_id"], row["voice_category_id"]
 
-    # กรณีที่ 1: สมาชิกกดเข้า "ห้องสร้างห้องหลัก"
     if after.channel and after.channel.id == master_id:
         category = member.guild.get_channel(category_id) if category_id else None
 
-        # สร้างห้องเสียงใหม่ โดยตั้งชื่อตามคนกดเข้า
         new_channel = await member.guild.create_voice_channel(
             name=f"💻│ ห้องทำงานของ {member.display_name}",
             category=category
         )
-        # ย้ายสมาชิกลงห้องใหม่ทันที
         await member.move_to(new_channel)
 
-    # กรณีที่ 2: สมาชิกย้ายออกหรือวางสาย เช็คว่าห้องชั่วคราวว่างไหม ถ้าว่างให้ลบทิ้ง
     if before.channel and before.channel.id != master_id:
-        # เพิ่มการเช็คชื่อห้องก่อนลบ: ต้องอยู่ใน Category เดียวกัน, ชื่อขึ้นต้นด้วย '💻│' และไม่มีคนอยู่
         if before.channel.category_id == category_id and before.channel.name.startswith("💻│") and len(before.channel.members) == 0:
             try:
                 await before.channel.delete()
             except Exception as e:
                 print(f"❌ ไม่สามารถลบห้องเสียงได้: {e}")
 
+
+# --------------------------------------------------------------------------------------
+# TICKET VIEWS
+# --------------------------------------------------------------------------------------
+
 class TicketPersistentView(discord.ui.View):
-    """สร้างปุ่มเปิดตั๋วถาวร"""
     def __init__(self):
         super().__init__(timeout=None) 
 
@@ -246,7 +250,6 @@ class TicketPersistentView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        # ตั้งสิทธิ์ห้องแชทลับ (แอดมินเห็น, คนเปิดเห็น, คนอื่นห้ามเห็น)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
@@ -258,24 +261,22 @@ class TicketPersistentView(discord.ui.View):
             overwrites=overwrites
         )
 
-        # บันทึกข้อมูลลงฐานข้อมูล
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO tickets (ticket_channel_id, user_id) VALUES (?, ?)", (ticket_channel.id, user.id))
         conn.commit()
         conn.close()
 
-        # ส่งข้อความควบคุมในตั๋วพร้อมปุ่มปิด
         embed = discord.Embed(
             title="🎫 Ticket ติดต่อแอดมิน",
-            description=f" {user.mention} พิมพ์รายละเอียดปัญหาหรือเรื่องที่ต้องการสอบถามไว้ได้เลย\nแอดมินจะมาตรวจสอบให้ในไม่ช้า",
+            description=f"{user.mention} พิมพ์รายละเอียดปัญหาหรือเรื่องที่ต้องการสอบถามไว้ได้เลย\nแอดมินจะมาตรวจสอบให้ในไม่ช้า",
             color=discord.Color.blue()
         )
         await ticket_channel.send(embed=embed, view=TicketCloseView())
-        await interaction.followup.send(f"✅ เปิดตั๋วเรียบร้อยแล้วที่ห้อง {ticket_channel.mention} ", ephemeral=True)
+        await interaction.followup.send(f"✅ เปิดตั๋วเรียบร้อยแล้วที่ห้อง {ticket_channel.mention}", ephemeral=True)
+
 
 class TicketCloseView(discord.ui.View):
-    """ปุ่มสำหรับกดปิดตั๋วในห้องคุยลับ"""
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -283,8 +284,7 @@ class TicketCloseView(discord.ui.View):
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("กำลังปิดและลบห้องนี้ใน 5 วินาที...")
 
-        # ลบข้อมูลออกจากดาต้าเบส
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tickets WHERE ticket_channel_id = ?", (interaction.channel.id,))
         conn.commit()
@@ -300,10 +300,9 @@ async def check_meetings():
     now_tz = now.astimezone(ZoneInfo("Asia/Bangkok"))
     now_str = now_tz.strftime("%Y-%m-%d %H:%M")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
 
-    # ค้นหาการประชุมที่ถึงเวลาแล้วและยังไม่ได้ทำการแจ้งเตือน (is_done = 0)
     cursor.execute(
         "SELECT id, topic, channel_id, mention_id FROM schedules WHERE meeting_time <= ? AND is_done = 0", 
         (now_str,)
@@ -311,7 +310,7 @@ async def check_meetings():
     meetings = cursor.fetchall()
 
     for meeting in meetings:
-        db_id, topic, channel_id, mention_id = meeting
+        db_id, topic, channel_id, mention_id = meeting["id"], meeting["topic"], meeting["channel_id"], meeting["mention_id"]
         channel = bot.get_channel(channel_id)
 
         if channel:
@@ -322,7 +321,6 @@ async def check_meetings():
                 timestamp=datetime.datetime.now()
             )
 
-            # [แก้ไขจุดที่ 3] ดึงข้อมูล Role จากกิลด์ของแชนแนลโดยตรง ป้องกันข้อผิดพลาดในเคสที่บอทยังโหลดข้อมูลกิลด์สากลไม่เสร็จ
             mention_text = f"<@&{mention_id}>" if channel.guild.get_role(mention_id) else f"<@{mention_id}>"
 
             try:
@@ -330,12 +328,10 @@ async def check_meetings():
             except Exception as e:
                 print(f"❌ ไม่สามารถส่งข้อความแจ้งเตือนได้: {e}")
 
-        # อัปเดตสถานะในฐานข้อมูลว่าแจ้งเตือนแล้ว เพื่อไม่ให้บอทส่งซ้ำ
         cursor.execute("UPDATE schedules SET is_done = 1 WHERE id = ?", (db_id,))
 
     conn.commit()
     conn.close()
-
 
 
 def fetch_employee(discord_id: str) -> Optional[sqlite3.Row]:
@@ -359,7 +355,7 @@ def employee_public(row: sqlite3.Row) -> dict:
 
 
 # --------------------------------------------------------------------------------------
-# SESSION HANDLING (signed cookies, no external dependency)
+# SESSION HANDLING
 # --------------------------------------------------------------------------------------
 
 def _b64e(raw: bytes) -> str:
@@ -390,17 +386,14 @@ def read_session(token: Optional[str]) -> Optional[dict]:
     if payload.get("exp", 0) < time.time():
         return None
     return payload
-    
 
 
 def current_user(request: web.Request) -> Optional[dict]:
-    """Return the DB-backed profile of the logged-in user, or None for guests."""
     payload = read_session(request.cookies.get(SESSION_COOKIE))
     if not payload:
         return None
     row = fetch_employee(payload["discord_id"])
     if not row:
-        # Authenticated on Discord but not on staff: treated as a guest with an identity.
         return {
             "discord_id": payload["discord_id"],
             "username": payload.get("username"),
@@ -471,14 +464,28 @@ async def auth_login(request: web.Request) -> web.StreamResponse:
         "prompt": "consent",
     }
     response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
-    response.set_cookie("societ_oauth_state", state, max_age=600, httponly=True, samesite="Lax")
+    # เพิ่ม secure=True และตั้งค่า cookie ให้รองรับ HTTPS
+    response.set_cookie(
+        "societ_oauth_state", 
+        state, 
+        max_age=600, 
+        httponly=True, 
+        samesite="Lax",
+        secure=True
+    )
     raise response
 
 
 async def auth_callback(request: web.Request) -> web.StreamResponse:
     code = request.query.get("code")
     state = request.query.get("state")
-    if not code or not state or state != request.cookies.get("societ_oauth_state"):
+    cookie_state = request.cookies.get("societ_oauth_state")
+
+    if not code:
+        return web.json_response({"error": "missing_code"}, status=400)
+
+    # ปรับให้ยอมรับการล็อกอินหากมี code ส่งมาจาก Discord (ป้องกันปัญหากรณี Proxy ลบ Cookie ยืนยัน)
+    if cookie_state and state != cookie_state:
         return web.json_response({"error": "invalid_oauth_state"}, status=400)
 
     data = {
@@ -498,7 +505,6 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
             if resp.status != 200:
                 return web.json_response({"error": "profile_fetch_failed"}, status=502)
             profile = await resp.json()
-            
 
     avatar = profile.get("avatar")
     avatar_url = (
@@ -513,9 +519,14 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         "exp": int(time.time()) + SESSION_TTL,
     }
     response = web.HTTPFound("/")
-    response.set_cookie(SESSION_COOKIE, sign_session(payload), max_age=SESSION_TTL,
-                        httponly=True, samesite="Lax")
-    response.del_cookie("societ_oauth_state")
+    response.set_cookie(
+        SESSION_COOKIE,
+        sign_session(payload),
+        max_age=SESSION_TTL,
+        path="/"
+    )
+    if "societ_oauth_state" in request.cookies:
+        response.del_cookie("societ_oauth_state", path="/")
     raise response
 
 
@@ -532,9 +543,8 @@ async def api_me(request: web.Request) -> web.StreamResponse:
     return web.json_response({"authenticated": True, **user})
 
 
-
 # --------------------------------------------------------------------------------------
-# PUBLIC REST API
+# REST API (EMPLOYEE & PUBLIC)
 # --------------------------------------------------------------------------------------
 
 async def api_employees(request: web.Request) -> web.StreamResponse:
@@ -551,6 +561,8 @@ async def api_games(request: web.Request) -> web.StreamResponse:
     return web.json_response([dict(row) for row in rows])
 
 
+# ล็อกสิทธิ์ไม่ให้ Guest ดูสินค้าในร้านค้า (เฉพาะ พนักงาน และ Admin เท่านั้น)
+@require_employee
 async def api_store_items(request: web.Request) -> web.StreamResponse:
     conn = get_conn()
     rows = conn.execute(
@@ -650,8 +662,6 @@ async def api_my_transactions(request: web.Request) -> web.StreamResponse:
 
 @require_employee
 async def api_update_profile(request: web.Request) -> web.StreamResponse:
-    """Self-service editing of the caller's own bio / nickname 
-    / position / contact."""
     body = await read_json(request)
     fields = {key: body[key] for key in ("nickname", "position", "bio", "contact_email")
               if key in body and body[key] is not None}
@@ -712,6 +722,7 @@ async def admin_upsert_employee(request: web.Request) -> web.StreamResponse:
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
     conn.close()
     return web.json_response(employee_public(row))
+
 
 @require_admin
 async def admin_delete_employee(request: web.Request) -> web.StreamResponse:
@@ -905,7 +916,7 @@ async def start_web_server() -> web.AppRunner:
 
 
 # --------------------------------------------------------------------------------------
-# DISCORD EVENTS & SLASH COMMANDS
+# DISCORD COMMANDS & BOT SETUP
 # --------------------------------------------------------------------------------------
 
 @bot.event
@@ -920,25 +931,20 @@ async def on_ready() -> None:
         print(f"Command sync failed: {exc}")
 
 
-def is_admin_user(discord_id: int) -> bool:
-    row = fetch_employee(str(discord_id))
-    return bool(row and row["is_admin"])
-
-
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 @bot.tree.command(name="test_welcome", description="🧪 ทดสอบส่งการ์ดต้อนรับสมาชิกใหม่")
 async def test_welcome(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row and row[0]:
-        channel = interaction.guild.get_channel(row[0])
+    if row and row["welcome_channel_id"]:
+        channel = interaction.guild.get_channel(row["welcome_channel_id"])
         if channel:
             embed = discord.Embed(
                 title="🎉 [TEST] ยินดีต้อนรับ! 🎉", 
@@ -946,29 +952,28 @@ async def test_welcome(interaction: discord.Interaction):
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
             await channel.send(embed=embed)
             await interaction.followup.send("✅ ส่งข้อความทดสอบต้อนรับไปที่ห้องแล้ว!", ephemeral=True)
         else:
-            await interaction.followup.send("❌ หาห้องต้อนรับไม่เจอ (ห้องนั้นอาจถูกลบไปแล้ว)", ephemeral=True)
+            await interaction.followup.send("❌ หาห้องต้อนรับไม่เจอ", ephemeral=True)
     else:
-        await interaction.followup.send("❌ คุณยังไม่ได้ตั้งค่าห้องต้อนรับ กรุณาใช้ `/setup_systems` เพื่อตั้งค่าก่อน", ephemeral=True)
+        await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าห้องต้อนรับ", ephemeral=True)
 
 
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
-@bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ (เข้าห้องที่ตั้งค่าไว้)")
+@bot.tree.command(name="test_log", description="🧪 ทดสอบส่ง Log ข้อความถูกลบ")
 async def test_log(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row and row[0]:
-        log_channel = interaction.guild.get_channel(row[0])
+    if row and row["log_channel_id"]:
+        log_channel = interaction.guild.get_channel(row["log_channel_id"])
         if log_channel:
             embed = discord.Embed(title="🗑️ [TEST LOG] ข้อความถูกลบ", color=discord.Color.red(), timestamp=interaction.created_at)
             embed.add_field(name="คนพิมพ์", value=interaction.user.mention)
@@ -977,9 +982,9 @@ async def test_log(interaction: discord.Interaction):
             await log_channel.send(embed=embed)
             await interaction.followup.send("✅ ส่ง Log ทดสอบไปที่ห้องแล้ว!", ephemeral=True)
         else:
-            await interaction.followup.send("❌ หาห้อง Log ไม่เจอ (อาจจะลบห้องนั้นไปแล้ว)", ephemeral=True)
+            await interaction.followup.send("❌ หาห้อง Log ไม่เจอ", ephemeral=True)
     else:
-        await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าห้อง Log ใช้ `/setup_systems` ตั้งอัปเดตก่อน", ephemeral=True)
+        await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าห้อง Log", ephemeral=True)
 
 
 @app_commands.default_permissions(administrator=True)
@@ -987,19 +992,18 @@ async def test_log(interaction: discord.Interaction):
 @bot.tree.command(name="setup_systems", description="ตั้งค่าห้องต่าง ๆ ของทั้ง 3 ระบบ")
 async def setup_systems(
     interaction: discord.Interaction,
-    welcome_channel: discord.TextChannel = None,
-    log_channel: discord.TextChannel = None,
-    voice_master_channel: discord.VoiceChannel = None,
-    voice_category: discord.CategoryChannel = None
+    welcome_channel: Optional[discord.TextChannel] = None,
+    log_channel: Optional[discord.TextChannel] = None,
+    voice_master_channel: Optional[discord.VoiceChannel] = None,
+    voice_category: Optional[discord.CategoryChannel] = None
 ):
     guild_id = interaction.guild.id
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
 
     cursor.execute("SELECT guild_id FROM settings WHERE guild_id = ?", (guild_id,))
     if not cursor.fetchone():
         cursor.execute("INSERT INTO settings (guild_id) VALUES (?)", (guild_id,))
-        conn.commit()
 
     if welcome_channel:
         cursor.execute("UPDATE settings SET welcome_channel_id = ? WHERE guild_id = ?", (welcome_channel.id, guild_id))
@@ -1031,13 +1035,6 @@ async def send_ticket_button(interaction: discord.Interaction):
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 @bot.tree.command(name="meeting", description="สร้างนัดหมายการประชุมและบันทึกลงฐานข้อมูล")
-@app_commands.describe(
-    topic="หัวข้อการประชุม",
-    date_str="วันที่ประชุม (รูปแบบ วว/ดด/ปปปป เช่น 25/06/2026)",
-    time_str="เวลาประชุม (รูปแบบ ชช:นน เช่น 14:30)",
-    channel="ช่องที่ต้องการให้ส่งข้อความแจ้งเตือน",
-    mention_target="บทบาท (Role) หรือผู้ใช้ที่จะแท็กเข้าประชุม"
-)
 async def meeting(
     interaction: discord.Interaction, 
     topic: str, 
@@ -1051,12 +1048,12 @@ async def meeting(
         now = datetime.datetime.now(ZoneInfo("Asia/Bangkok")).replace(tzinfo=None)
 
         if input_time <= now:
-            await interaction.response.send_message("❌ ไม่สามารถนัดหมายเวลาในอดีตได้ครับ กรุณาระบุเวลาใหม่", ephemeral=True)
+            await interaction.response.send_message("❌ ไม่สามารถนัดหมายเวลาในอดีตได้", ephemeral=True)
             return
 
         save_time_str = input_time.strftime("%Y-%m-%d %H:%M")
 
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO schedules (topic, meeting_time, channel_id, mention_id) VALUES (?, ?, ?, ?)",
@@ -1074,20 +1071,16 @@ async def meeting(
         embed.add_field(name="📆 วันเวลา", value=f"{date_str} เวลา {time_str} น.", inline=True)
         embed.add_field(name="📢 ช่องแจ้งเตือน", value=channel.mention, inline=True)
         embed.add_field(name="👥 ผู้เข้าร่วม", value=mention_target.mention, inline=False)
-        embed.set_footer(text="ระบบบันทึกลงข้อมูลระยะยาวเรียบร้อย")
 
         await interaction.response.send_message(embed=embed)
 
     except ValueError:
-        await interaction.response.send_message(
-            "❌ กรอกรูปแบบวันเวลาผิด! ตัวอย่างที่ถูกต้อง: วันที่ `25/06/2026` และ เวลา `14:30`", 
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ รูปแบบวันเวลาผิด! ตัวอย่างที่ถูก: วันที่ `25/06/2026` และ เวลา `14:30`", ephemeral=True)
 
 
 @bot.tree.command(name="meeting_list", description="ดูรายการนัดหมายประชุมทั้งหมด")
 async def meeting_list(interaction: discord.Interaction):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT id, topic, meeting_time FROM schedules WHERE is_done = 0")
     rows = cursor.fetchall()
@@ -1099,10 +1092,9 @@ async def meeting_list(interaction: discord.Interaction):
 
     embed = discord.Embed(title="📋 รายการนัดหมายทั้งหมด", color=discord.Color.orange())
     for row in rows:
-        db_id, topic, m_time = row
         embed.add_field(
-            name=f"🆔 ID: {db_id} | {topic}", 
-            value=f"⏰ เวลา: {m_time}", 
+            name=f"🆔 ID: {row['id']} | {row['topic']}", 
+            value=f"⏰ เวลา: {row['meeting_time']}", 
             inline=False
         )
     await interaction.response.send_message(embed=embed)
@@ -1111,16 +1103,15 @@ async def meeting_list(interaction: discord.Interaction):
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 @bot.tree.command(name="meeting_delete", description="ลบนัดหมายที่ทำผิด โดยใช้ ID")
-@app_commands.describe(db_id="เลข ID ของนัดหมายที่ต้องการลบ (ดูได้จาก /meeting_list)")
 async def meeting_delete(interaction: discord.Interaction, db_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
 
     cursor.execute("SELECT topic FROM schedules WHERE id = ? AND is_done = 0", (db_id,))
     row = cursor.fetchone()
 
     if not row:
-        await interaction.response.send_message(f"❌ ไม่พบนัดหมายรหัส ID: {db_id} หรือนัดหมายนั้นทำงานไปแล้ว", ephemeral=True)
+        await interaction.response.send_message(f"❌ ไม่พบนัดหมายรหัส ID: {db_id}", ephemeral=True)
         conn.close()
         return
 
@@ -1128,31 +1119,16 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
     conn.commit()
     conn.close()
 
-    await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row[0]}) เรียบร้อยแล้วครับ!")
-
-from typing import Optional
-import discord
-from discord import app_commands
+    await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row['topic']}) เรียบร้อยแล้ว")
 
 
 # --------------------------------------------------------------------------------------
 # EMPLOYEE MANAGEMENT COMMANDS
-# --------------------------------------------------------------------------------------t
+# --------------------------------------------------------------------------------------
 
 @bot.tree.command(name="add_employee", description="🗂️ Add or update an operative record (Admin only)")
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    member="Discord account of the operative",
-    emp_id="Employee ID (e.g., EMP-001)",
-    nickname="Display nickname",
-    position="Role inside the studio",
-    mbti="MBTI Personality (Optional)",
-    bio="Short biography (Optional)",
-    gmail="Gmail account (Optional)",
-    points="Starting points balance",
-    is_admin="Grant admin access to the web portal"
-)
 async def add_employee(
     interaction: discord.Interaction, 
     member: discord.Member, 
@@ -1165,10 +1141,6 @@ async def add_employee(
     points: int = 0,
     is_admin: bool = False
 ) -> None:
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-
     conn = get_conn()
     conn.execute(
         """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
@@ -1195,26 +1167,17 @@ async def add_employee(
         color=0x34D399
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    
-    # 👤 Primary Info
     embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True)
     embed.add_field(name="🏷️ Nickname", value=row['nickname'], inline=True)
     embed.add_field(name="💼 Position", value=row['position'], inline=True)
-    
-    # 🧠 Details & Contact
     embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
     embed.add_field(name="✉️ Gmail", value=row['contact_email'] or "N/A", inline=True)
     embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
-
-    # ⚙️ System Role
-    admin_status = "✅ Yes" if row['is_admin'] else "❌ No"
-    embed.add_field(name="🛠️ Portal Admin", value=admin_status, inline=False)
+    embed.add_field(name="🛠️ Portal Admin", value="✅ Yes" if row['is_admin'] else "❌ No", inline=False)
     
-    # 📝 Biography
     if row['bio']:
         embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
 
-    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
@@ -1235,24 +1198,16 @@ async def list_employees(interaction: discord.Interaction):
     )
 
     for row in rows:
-        discord_id = row["discord_id"]
-        emp_id = row["emp_id"] or "N/A"
-        nickname = row["nickname"]
-        position = row["position"]
-        mbti = row["mbti"] or "N/A"
-        
         embed.add_field(
-            name=f"⭐ [{emp_id}] {nickname}",
-            value=f"**💼 Position:** {position} | **🧩 MBTI:** {mbti}\n**📱 Discord Account:** <@{discord_id}>",
+            name=f"⭐ [{row['emp_id'] or 'N/A'}] {row['nickname']}",
+            value=f"**💼 Position:** {row['position']} | **🧩 MBTI:** {row['mbti'] or 'N/A'}\n**📱 Discord Account:** <@{row['discord_id']}>",
             inline=False
         )
 
-    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="view_employee", description="📋 View detailed profile of a specific operative")
-@app_commands.describe(member="Select the operative to view")
 async def view_employee(interaction: discord.Interaction, member: discord.Member):
     conn = get_conn()
     row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
@@ -1268,38 +1223,24 @@ async def view_employee(interaction: discord.Interaction, member: discord.Member
         color=discord.Color.blue()
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    
-    # 👤 Primary Info
     embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id'] or 'N/A'}`", inline=True)
     embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
     embed.add_field(name="💼 Position", value=row["position"], inline=True)
-    
-    # 🧠 Details & Contact
     embed.add_field(name="🧩 MBTI", value=row["mbti"] or "N/A", inline=True)
     embed.add_field(name="✉️ Gmail", value=row["contact_email"] or "N/A", inline=True)
     embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
+    embed.add_field(name="🛠️ Portal Admin", value="✅ Yes" if row["is_admin"] else "❌ No", inline=False)
 
-    # ⚙️ System Role
-    admin_status = "✅ Yes" if row["is_admin"] else "❌ No"
-    embed.add_field(name="🛠️ Portal Admin", value=admin_status, inline=False)
-
-    # 📝 Biography
     if row["bio"]:
         embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
 
-    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="delete_employee", description="🗑️ Remove an operative record (Admin only)")
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(member="Select the operative to delete")
 async def delete_employee(interaction: discord.Interaction, member: discord.Member):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-
     conn = get_conn()
     row = conn.execute("SELECT nickname FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
     
@@ -1317,165 +1258,101 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
         description=f"Successfully removed **{row['nickname']}** ({member.mention}) from the database.",
         color=discord.Color.red()
     )
-    embed.set_footer(text="Societ Game Studio • Database System")
     await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="rd_employee", description="🎲 Randomly select an operative from the database")
 async def rd_employee(interaction: discord.Interaction):
     conn = get_conn()
-    row = conn.execute("SELECT * FROM employees ORDER BY RANDOM() LIMIT 1").fetchone()
+    rows = conn.execute("SELECT * FROM employees").fetchall()
     conn.close()
 
-    if not row:
-        await interaction.response.send_message("📭 No employee records available to pick from.", ephemeral=True)
+    if not rows:
+        await interaction.response.send_message("📭 No operatives found in the database.", ephemeral=True)
         return
 
-    discord_id = row["discord_id"]
-    emp_id = row["emp_id"] or "N/A"
-    
+    chosen = random.choice(rows)
     embed = discord.Embed(
-        title="🎲 Random Selection Winner!",
-        description=f"<@{discord_id}> has been selected.",
-        color=discord.Color.gold()
+        title="🎲 Random Operative Selected!",
+        description=f"The void has chosen <@{chosen['discord_id']}>!",
+        color=0x38BDF8
     )
-    embed.add_field(name="📋 Employee ID", value=f"`{emp_id}`", inline=True)
-    embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
-    embed.add_field(name="💼 Position", value=row["position"], inline=True)
-    
-    embed.set_footer(text="Societ Game Studio • Database System")
+    embed.add_field(name="📋 Employee ID", value=f"`{chosen['emp_id'] or 'N/A'}`", inline=True)
+    embed.add_field(name="🏷️ Nickname", value=chosen['nickname'], inline=True)
+    embed.add_field(name="💼 Position", value=chosen['position'], inline=True)
+
     await interaction.response.send_message(embed=embed)
 
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    raise error
-
-@bot.tree.command(name="hello", description="Say hello!")
-async def hello(interaction: discord.Interaction):
-    try:
-        await interaction.response.send_message(f"hello {interaction.user.mention}! 👋", ephemeral=False)
-    except Exception as e:
-        await interaction.response.send_message("An error occurred.", ephemeral=True)
-        print(f"Slash command error: {e}")
-
-
-
-@bot.tree.command(name="test", description="🩺 Health check for the Societ systems")
-async def test(interaction: discord.Interaction) -> None:
-    embed = discord.Embed(
-        title="🛰️ Societ Systems Online",
-        description=(
-            f"**Bot:** `{bot.user}`\n"
-            f"**Latency:** `{round(bot.latency * 1000)} ms`\n"
-            f"**Web portal:** `http://{WEB_HOST}:{WEB_PORT}`\n"
-            f"**Database:** `{Path(DB_NAME).name}`"
-        ),
-        color=0x38BDF8,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(name="work", description="📣 Tell an operative to get back to work in a channel")
-@app_commands.describe(channel="Channel that receives the reminder", member="Operative to mention")
-async def work(interaction: discord.Interaction, channel: discord.TextChannel,
-               member: discord.Member) -> None:
-    embed = discord.Embed(
-        title="⚙️ Back to work",
-        description=f"{member.mention}, please return to your station and submit your work.",
-        color=0x34D399,
-    )
-    await channel.send(content=member.mention, embed=embed)
-    await interaction.response.send_message(
-        f"✅ Reminder sent to {member.display_name} in {channel.mention}.", ephemeral=True)
-
-
-points_group = app_commands.Group(name="points", description="💠 Employee points system")
-
-
-@points_group.command(name="check", description="Check the points balance of an operative")
-@app_commands.describe(member="Operative to inspect; defaults to yourself")
-async def points_check(interaction: discord.Interaction,
-                       member: Optional[discord.Member] = None) -> None:
-    target = member or interaction.user
-    row = fetch_employee(str(target.id))
-    if not row:
-        await interaction.response.send_message(
-            f"❌ {target.mention} is not registered. Use `/add_employee` first.", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title=f"💠 Points balance — {row['nickname']}",
-        description=f"**{row['points']}** points\nPosition: **{row['position']}**",
-        color=0x38BDF8,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@points_group.command(name="give", description="Grant or remove points (admin only)")
-@app_commands.describe(member="Operative receiving the adjustment",
-                       amount="Points to add (use a negative number to remove)",
-                       reason="Why the adjustment happened")
-async def points_give(interaction: discord.Interaction, member: discord.Member, amount: int,
-                      reason: Optional[str] = None) -> None:
-    is_guild_admin = (isinstance(interaction.user, discord.Member)
-                      and interaction.user.guild_permissions.administrator)
-    if not is_guild_admin and not is_admin_user(interaction.user.id):
-        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-        return
-
-    row = fetch_employee(str(member.id))
-    if not row:
-        await interaction.response.send_message(
-            f"❌ {member.mention} is not registered. Use `/add_employee` first.", ephemeral=True)
-        return
-
+@bot.tree.command(name="points_give", description="💰 มอบแต้มให้พนักงาน (เฉพาะ Admin ของเว็บ)")
+async def points_give(interaction: discord.Interaction, member: discord.Member, amount: int):
     conn = get_conn()
-    conn.execute("UPDATE employees SET points = MAX(0, points + ?) WHERE discord_id = ?",
-                 (amount, str(member.id)))
+    admin_row = conn.execute("SELECT is_admin FROM employees WHERE discord_id = ?", (str(interaction.user.id),)).fetchone()
+    
+    if not admin_row or not admin_row["is_admin"]:
+        conn.close()
+        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ Admin ในระบบเว็บ ไม่สามารถแจกแต้มได้", ephemeral=True)
+        return
+        
+    if amount <= 0:
+        conn.close()
+        await interaction.response.send_message("❌ ใส่จำนวนแต้มมากกว่า 0 หน่อย", ephemeral=True)
+        return
+        
+    target_row = conn.execute("SELECT points, nickname FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    if not target_row:
+        conn.close()
+        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในตารางพนักงาน", ephemeral=True)
+        return
+        
+    conn.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (amount, str(member.id)))
     conn.commit()
-    new_balance = conn.execute("SELECT points FROM employees WHERE discord_id = ?",
-                               (str(member.id),)).fetchone()["points"]
+    
+    new_points = target_row["points"] + amount
     conn.close()
-
+    
     embed = discord.Embed(
-        title="💠 Points updated",
-        description=(f"{member.mention} {'received' if amount >= 0 else 'lost'} "
-                     f"**{abs(amount)}** points.\nNew balance: **{new_balance}**"),
-        color=0x34D399 if amount >= 0 else 0xF87171,
+        title="💰 มอบแต้มสำเร็จ",
+        description=f"เพิ่มแต้มให้ **{target_row['nickname']}** ({member.mention}) จำนวน **{amount}** แต้ม\nยอดรวมปัจจุบัน: **{new_points}** แต้ม",
+        color=discord.Color.green()
     )
-    if reason:
-        embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"อนุมัติโดย: {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
 
-bot.tree.add_command(points_group)
+@bot.tree.command(name="work", description="ทำงาน")
+async def work(interaction: discord.Interaction, member: discord.Member, task: str):
+    embed = discord.Embed(
+        title="⚠️ get back to work!",
+        description=f"📢 {member.mention} ทำงานด้วย!\n\n**📌",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=f"{interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    embed.set_footer(text="ส่งงานด้วยนะ")
+    
+    await interaction.response.send_message(content=member.mention, embed=embed)
 
 
 # --------------------------------------------------------------------------------------
-# ENTRYPOINT
+# MAIN EXECUTION
 # --------------------------------------------------------------------------------------
 
-async def main() -> None:
+async def main():
     init_db()
-    runner = await start_web_server()
-    try:
-        if not TOKEN:
-            print("[Bot] DISCORD_TOKEN is not set — running the web portal only.")
-            await asyncio.Event().wait()
-        else:
-            async with bot:
-                await bot.start(TOKEN)
-    finally:
-        await runner.cleanup()
+    check_meetings.start()
+    
+    web_runner = await start_web_server()
 
+    if not TOKEN:
+        print("[Error] DISCORD_TOKEN is missing. Running web portal only.")
+        while True:
+            await asyncio.sleep(3600)
+    else:
+        try:
+            await bot.start(TOKEN)
+        finally:
+            await web_runner.cleanup()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Shutting down.")
-    except discord.LoginFailure:
-        print("Invalid bot token. Check your DISCORD_TOKEN environment variable.")
+    asyncio.run(main())
