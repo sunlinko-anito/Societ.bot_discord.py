@@ -39,11 +39,13 @@ DB_NAME = os.getenv("SOCIET_DB", str(BASE_DIR / "database.db"))
 TOKEN = os.getenv("DISCORD_TOKEN")
 CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
-OAUTH_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:5000/auth/callback")
+OAUTH_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:13660/auth/callback")
 ADMIN_WEBHOOK_URL = os.getenv("ADMIN_WEBHOOK_URL", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 SESSION_COOKIE = "societ_session"
 SESSION_TTL = 60 * 60 * 24 * 7
+SESSION_SECURE = os.getenv("SESSION_SECURE", "false").lower() == "true"
+
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("PORT", "13660"))
 
@@ -54,7 +56,22 @@ intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+class SocietBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self) -> None:
+        # ลงทะเบียน Persistent Views เพื่อให้ปุ่มใช้งานได้ถาวร
+        self.add_view(TicketPersistentView())
+        self.add_view(TicketCloseView())
+        # เริ่มการทำงานของ Background Task
+        if not check_meetings.is_running():
+            check_meetings.start()
+
+
+bot = SocietBot()
+work_cooldowns = {}  # พจนานุกรมเก็บเวลาคูลดาวน์สำหรับคำสั่ง /work
 
 
 # --------------------------------------------------------------------------------------
@@ -133,7 +150,7 @@ def init_db() -> None:
             is_admin INTEGER DEFAULT 0
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             guild_id INTEGER PRIMARY KEY,
@@ -464,14 +481,13 @@ async def auth_login(request: web.Request) -> web.StreamResponse:
         "prompt": "consent",
     }
     response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
-    # เพิ่ม secure=True และตั้งค่า cookie ให้รองรับ HTTPS
     response.set_cookie(
         "societ_oauth_state", 
         state, 
         max_age=600, 
         httponly=True, 
         samesite="Lax",
-        secure=True
+        secure=SESSION_SECURE
     )
     raise response
 
@@ -484,7 +500,6 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
     if not code:
         return web.json_response({"error": "missing_code"}, status=400)
 
-    # ปรับให้ยอมรับการล็อกอินหากมี code ส่งมาจาก Discord (ป้องกันปัญหากรณี Proxy ลบ Cookie ยืนยัน)
     if cookie_state and state != cookie_state:
         return web.json_response({"error": "invalid_oauth_state"}, status=400)
 
@@ -523,7 +538,10 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         SESSION_COOKIE,
         sign_session(payload),
         max_age=SESSION_TTL,
-        path="/"
+        path="/",
+        httponly=True,
+        samesite="Lax",
+        secure=SESSION_SECURE
     )
     if "societ_oauth_state" in request.cookies:
         response.del_cookie("societ_oauth_state", path="/")
@@ -561,7 +579,6 @@ async def api_games(request: web.Request) -> web.StreamResponse:
     return web.json_response([dict(row) for row in rows])
 
 
-# ล็อกสิทธิ์ไม่ให้ Guest ดูสินค้าในร้านค้า (เฉพาะ พนักงาน และ Admin เท่านั้น)
 @require_employee
 async def api_store_items(request: web.Request) -> web.StreamResponse:
     conn = get_conn()
@@ -863,7 +880,7 @@ async def admin_transactions(request: web.Request) -> web.StreamResponse:
 
 
 # --------------------------------------------------------------------------------------
-# WEB APP
+# WEB APP SETUP
 # --------------------------------------------------------------------------------------
 
 async def index(request: web.Request) -> web.StreamResponse:
@@ -902,7 +919,9 @@ def build_app() -> web.Application:
         web.delete("/api/admin/store/items/{item_id}", admin_delete_store_item),
         web.get("/api/admin/transactions", admin_transactions),
     ])
-    app.router.add_static("/assets/", BASE_DIR / "assets")
+    assets_dir = BASE_DIR / "assets"
+    if assets_dir.exists():
+        app.router.add_static("/assets/", assets_dir)
     return app
 
 
@@ -1284,75 +1303,118 @@ async def rd_employee(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="points_give", description="💰 มอบแต้มให้พนักงาน (เฉพาะ Admin ของเว็บ)")
+@bot.tree.command(name="work", description="🔨 ทำงานประจำวันเพื่อรับแต้มสะสม")
+async def work(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    now = time.time()
+    cooldown_seconds = 3600  # คูลดาวน์ 1 ชั่วโมง
+
+    if user_id in work_cooldowns:
+        remaining = int(work_cooldowns[user_id] + cooldown_seconds - now)
+        if remaining > 0:
+            minutes, seconds = divmod(remaining, 60)
+            await interaction.response.send_message(
+                f"⏳ คุณเพิ่งทำงานไป! โปรดรออีก **{minutes} นาที {seconds} วินาที** ก่อนทำงานครั้งถัดไป",
+                ephemeral=True
+            )
+            return
+
+    conn = get_conn()
+    emp_row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (user_id,)).fetchone()
+    if not emp_row:
+        conn.close()
+        await interaction.response.send_message(
+            "❌ คุณยังไม่ได้ลงทะเบียนเป็นพนักงานในระบบ (ติดต่อ Admin เพื่อลงทะเบียน)",
+            ephemeral=True
+        )
+        return
+
+    earned = random.randint(15, 50)
+    conn.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (earned, user_id))
+    conn.commit()
+    new_points = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (user_id,)).fetchone()["points"]
+    conn.close()
+
+    work_cooldowns[user_id] = now
+
+    work_messages = [
+        f"💻 **{emp_row['nickname']}** เขียนโค้ดระบบ backend สำเร็จ!",
+        f"🎨 **{emp_row['nickname']}** ออกแบบ UI/UX หน้าใหม่สวยงาม!",
+        f"🐛 **{emp_row['nickname']}** แก้ไข Bug ร้ายแรงในเกมสำเร็จ!",
+        f"🎮 **{emp_row['nickname']}** ทดสอบระบบเกมอย่างเข้มข้น!",
+        f"📄 **{emp_row['nickname']}** เขียน Game Design Document เสร็จสมบูรณ์!"
+    ]
+
+    embed = discord.Embed(
+        title="🔨 ทำงานสำเร็จ!",
+        description=random.choice(work_messages),
+        color=0x38BDF8
+    )
+    embed.add_field(name="💰 แต้มที่ได้รับ", value=f"+**{earned}** pts", inline=True)
+    embed.add_field(name="💳 แต้มสะสมรวม", value=f"**{new_points}** pts", inline=True)
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="points_give", description="💰 มอบแต้มให้พนักงาน (เฉพาะ Admin ของเว็บ/ระบบ)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
 async def points_give(interaction: discord.Interaction, member: discord.Member, amount: int):
     conn = get_conn()
     admin_row = conn.execute("SELECT is_admin FROM employees WHERE discord_id = ?", (str(interaction.user.id),)).fetchone()
     
     if not admin_row or not admin_row["is_admin"]:
         conn.close()
-        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ Admin ในระบบเว็บ ไม่สามารถแจกแต้มได้", ephemeral=True)
+        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ Admin ในระบบ ไม่สามารถแจกแต้มได้", ephemeral=True)
         return
         
     if amount <= 0:
         conn.close()
-        await interaction.response.send_message("❌ ใส่จำนวนแต้มมากกว่า 0 หน่อย", ephemeral=True)
+        await interaction.response.send_message("❌ จำนวนแต้มต้องมากกว่า 0", ephemeral=True)
         return
-        
-    target_row = conn.execute("SELECT points, nickname FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    if not target_row:
+
+    emp_row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+    if not emp_row:
         conn.close()
-        await interaction.response.send_message(f"❌ ไม่พบข้อมูลของ {member.mention} ในตารางพนักงาน", ephemeral=True)
+        await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานสำหรับ {member.mention}", ephemeral=True)
         return
-        
+
     conn.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (amount, str(member.id)))
     conn.commit()
-    
-    new_points = target_row["points"] + amount
+    new_points = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()["points"]
     conn.close()
-    
+
     embed = discord.Embed(
-        title="💰 มอบแต้มสำเร็จ",
-        description=f"เพิ่มแต้มให้ **{target_row['nickname']}** ({member.mention}) จำนวน **{amount}** แต้ม\nยอดรวมปัจจุบัน: **{new_points}** แต้ม",
-        color=discord.Color.green()
+        title="💰 มอบแต้มสำเร็จ!",
+        description=f"มอบ **{amount}** แต้ม ให้แก่ {member.mention}",
+        color=0x34D399
     )
-    embed.set_footer(text=f"อนุมัติโดย: {interaction.user.display_name}")
+    embed.add_field(name="👤 พนักงาน", value=emp_row["nickname"], inline=True)
+    embed.add_field(name="💳 แต้มรวมใหม่", value=f"**{new_points}** pts", inline=True)
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="work", description="ทำงาน")
-async def work(interaction: discord.Interaction, member: discord.Member, task: str):
-    embed = discord.Embed(
-        title="⚠️ get back to work!",
-        description=f"📢 {member.mention} ทำงานด้วย!\n\n**📌",
-        color=discord.Color.orange(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_author(name=f"{interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-    embed.set_footer(text="ส่งงานด้วยนะ")
-    
-    await interaction.response.send_message(content=member.mention, embed=embed)
-
-
 # --------------------------------------------------------------------------------------
-# MAIN EXECUTION
+# MAIN ENTRYPOINT
 # --------------------------------------------------------------------------------------
 
 async def main():
     init_db()
-    check_meetings.start()
+    runner = await start_web_server()
     
-    web_runner = await start_web_server()
-
     if not TOKEN:
-        print("[Error] DISCORD_TOKEN is missing. Running web portal only.")
+        print("[Warning] DISCORD_TOKEN is not configured in environment variables!")
+        print("[System] Web Portal will keep running. Press Ctrl+C to terminate.")
         while True:
             await asyncio.sleep(3600)
     else:
         try:
             await bot.start(TOKEN)
         finally:
-            await web_runner.cleanup()
+            await runner.cleanup()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[System] Societ service shutting down gracefully...")
