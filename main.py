@@ -1281,13 +1281,29 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
 
 
 @bot.tree.command(name="rd_employee", description="🎲 Randomly select an operative from the database")
-async def rd_employee(interaction: discord.Interaction):
+@app_commands.describe(
+    position="กรองเฉพาะตำแหน่งที่ต้องการ (หากไม่ระบุจะสุ่มจากทั้งหมด)",
+    channel="ช่องที่ต้องการให้ส่งข้อความไป (หากไม่ระบุจะส่งในช่องปัจจุบัน)"
+)
+async def rd_employee(
+    interaction: discord.Interaction, 
+    position: typing.Optional[str] = None,
+    channel: typing.Optional[discord.TextChannel] = None
+):
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM employees").fetchall()
+    
+    # กรองข้อมูลตามตำแหน่งถ้ามีการระบุ
+    if position:
+        rows = conn.execute("SELECT * FROM employees WHERE position = ?", (position,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM employees").fetchall()
+        
     conn.close()
 
+    # หากไม่พบข้อมูล
     if not rows:
-        await interaction.response.send_message("📭 No operatives found in the database.", ephemeral=True)
+        no_data_msg = f"📭 ไม่พบรายชื่อพนักงานในตำแหน่ง `{position}`" if position else "📭 No operatives found in the database."
+        await interaction.response.send_message(no_data_msg, ephemeral=True)
         return
 
     chosen = random.choice(rows)
@@ -1300,9 +1316,18 @@ async def rd_employee(interaction: discord.Interaction):
     embed.add_field(name="🏷️ Nickname", value=chosen['nickname'], inline=True)
     embed.add_field(name="💼 Position", value=chosen['position'], inline=True)
 
-    await interaction.response.send_message(embed=embed)
+    # ตรวจสอบว่าต้องส่งไปที่ช่องไหน
+    target_channel = channel or interaction.channel
 
+    if target_channel == interaction.channel:
+        # หากส่งในช่องปัจจุบัน สามารถตอบกลับ Interaction ได้เลย
+        await interaction.response.send_message(embed=embed)
+    else:
+        # หากส่งไปช่องอื่น ให้ส่ง Embed ไปที่ช่องนั้น แล้วตอบกลับผู้ใช้แบบ Ephemeral (เห็นคนเดียว)
+        await target_channel.send(embed=embed)
+        await interaction.response.send_message(f"✅ สุ่มสำเร็จ! ส่งผลลัพธ์ไปที่ช่อง {target_channel.mention} เรียบร้อยแล้ว", ephemeral=True)
 
+"""
 @bot.tree.command(name="work", description="🔨 ทำงานประจำวันเพื่อรับแต้มสะสม")
 async def work(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
@@ -1353,7 +1378,20 @@ async def work(interaction: discord.Interaction):
     embed.add_field(name="💰 แต้มที่ได้รับ", value=f"+**{earned}** pts", inline=True)
     embed.add_field(name="💳 แต้มสะสมรวม", value=f"**{new_points}** pts", inline=True)
     await interaction.response.send_message(embed=embed)
+"""
 
+@bot.tree.command(name="work", description="ทำงาน")
+async def work(interaction: discord.Interaction, member: discord.Member, task: str):
+    embed = discord.Embed(
+        title="⚠️ get back to work!",
+        description=f"📢 {member.mention} ทำงานด้วย!\n\n**📌",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=f"{interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    embed.set_footer(text="ส่งงานด้วยนะ")
+    
+    await interaction.response.send_message(content=member.mention, embed=embed)
 
 @bot.tree.command(name="points_give", description="💰 มอบแต้มให้พนักงาน (เฉพาะ Admin ของเว็บ/ระบบ)")
 @app_commands.default_permissions(administrator=True)
