@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-
+import typing
 from discord import app_commands
 from discord.ext import commands, tasks
 
@@ -714,8 +714,8 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
 )
 async def rd_employee(
     interaction: discord.Interaction, 
-    position: typing.Optional[str] = None,
-    channel: typing.Optional[discord.TextChannel] = None
+    position: Optional[str] = None,
+    channel: Optional[discord.TextChannel] = None
 ):
     conn = get_conn()
     
