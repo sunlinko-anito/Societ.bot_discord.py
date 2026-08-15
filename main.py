@@ -1694,8 +1694,13 @@ def build_app(bot_instance) -> web.Application:
 
 # ================= Entry Point =================
 async def main():
-    init_db()
-    runner = await start_web_server()
+    # 1. สร้างเชื่อมต่อ Database เบื้องต้นเพื่อเรียกใช้ init_db
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        await init_db(db)
+        
+    # 2. รันระบบ Web และ Bot ต่อตามปกติ
+    runner = await bot.web_app # หรือส่วนจัดการ runner เดิมของคุณ
     
     try:
         if not TOKEN:
@@ -1710,13 +1715,8 @@ async def main():
         print("\n[System] Shutting down gracefully...")
     finally:
         print("[System] Cleaning up web server...")
-        await runner.cleanup()
+        if hasattr(bot, "web_runner") and bot.web_runner:
+            await bot.web_runner.cleanup()
 
         if TOKEN and not bot.is_closed():
             await bot.close()
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
