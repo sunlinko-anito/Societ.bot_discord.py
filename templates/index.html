@@ -1,1 +1,29 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Societ - Home</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-dark text-white">
+    <div class="container text-center mt-5">
+        <h1>Welcome to Societ Project</h1>
+        <p>Your central hub for operations.</p>
+        <div class="mt-4">
+            <a href="/operatives" class="btn btn-outline-light m-2">Operatives</a>
+            <a href="/store" class="btn btn-outline-light m-2">Store</a>
+            <a href="/archives" class="btn btn-outline-light m-2">Archives</a>
+        </div>
+        <div class="mt-5">
+            {% if user %}
+                <p>Logged in as: {{ user.username }}</p>
+                <a href="/admin" class="btn btn-primary">Admin Panel</a>
+                <a href="/logout" class="btn btn-danger">Logout</a>
+            {% else %}
+                <a href="/login" class="btn btn-success">Login with Discord (Admin Only)</a>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
