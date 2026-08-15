@@ -891,17 +891,43 @@ async def healthcheck(request: web.Request) -> web.StreamResponse:
     return web.json_response({"status": "online", "bot": bool(bot.user and bot.is_ready())})
 
 
+# 1. เขียน Handlers (ห้องเป้าหมาย)
+async def page_index(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(BASE_DIR / "pages" / "index.html")
+
+async def page_operatives(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(BASE_DIR / "pages" / "operatives.html")
+
+async def page_archives(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(BASE_DIR / "pages" / "archives.html")
+
+@require_employee
+async def page_store(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(BASE_DIR / "pages" / "store.html")
+
+@require_admin
+async def page_admin(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(BASE_DIR / "pages" / "admin.html")
+
+
+# 2. นำมาผูก URL ใน build_app() (ป้ายบอกทาง)
 def build_app() -> web.Application:
     app = web.Application()
     app.add_routes([
-        web.get("/", index),
-        web.get("/healthz", healthcheck),
+        # --- หน้าเว็บ MPA Pages ---
+        web.get("/", page_index),                    # พิมพ์ / ให้วิ่งไป page_index
+        web.get("/operatives", page_operatives),    # พิมพ์ /operatives ให้วิ่งไป page_operatives
+        web.get("/archives", page_archives),        # พิมพ์ /archives ให้วิ่งไป page_archives
+        web.get("/store", page_store),              # พิมพ์ /store ให้วิ่งไป page_store
+        web.get("/admin", page_admin),              # พิมพ์ /admin ให้วิ่งไป page_admin
 
+        # --- ระบบ Auth & REST APIs เดิมของคุณ ---
+        web.get("/healthz", healthcheck),
         web.get("/auth/login", auth_login),
         web.get("/auth/callback", auth_callback),
         web.post("/auth/logout", auth_logout),
         web.get("/api/me", api_me),
-
+        
         web.get("/api/employees", api_employees),
         web.get("/api/games", api_games),
         web.get("/api/store/items", api_store_items),
@@ -919,9 +945,11 @@ def build_app() -> web.Application:
         web.delete("/api/admin/store/items/{item_id}", admin_delete_store_item),
         web.get("/api/admin/transactions", admin_transactions),
     ])
+
     assets_dir = BASE_DIR / "assets"
     if assets_dir.exists():
         app.router.add_static("/assets/", assets_dir)
+        
     return app
 
 
@@ -1439,20 +1467,26 @@ async def main():
     init_db()
     runner = await start_web_server()
     
-    if not TOKEN:
-        print("[Warning] DISCORD_TOKEN is not configured in environment variables!")
-        print("[System] Web Portal will keep running. Press Ctrl+C to terminate.")
-        while True:
-            await asyncio.sleep(3600)
-    else:
-        try:
+    try:
+        if not TOKEN:
+            print("[Warning] DISCORD_TOKEN is not configured in environment variables!")
+            print("[System] Web Portal will keep running. Press Ctrl+C to terminate.")
+            while True:
+                await asyncio.sleep(3600)
+        else:
             await bot.start(TOKEN)
-        finally:
-            await runner.cleanup()
+            
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n[System] Shutting down gracefully...")
+    finally:
+        print("[System] Cleaning up web server...")
+        await runner.cleanup()
 
+        if TOKEN and not bot.is_closed():
+            await bot.close()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n[System] Societ service shutting down gracefully...")
+        pass
