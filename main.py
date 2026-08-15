@@ -541,22 +541,29 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
 # EMPLOYEE MANAGEMENT COMMANDS
 # --------------------------------------------------------------------------------------
 
-@bot.tree.command(name="add_employee", description="🗂️ Add or update an operative record (Admin only)")
+@bot.tree.command(
+    name="add_employee",
+    description="🗂️ Add or update an operative record (Admin only)",
+)
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 async def add_employee(
-    interaction: discord.Interaction, 
-    member: discord.Member, 
+    interaction: discord.Interaction,
+    member: discord.Member,
     emp_id: str,
     nickname: str,
-    position: str, 
+    position: str,
     mbti: str = "N/A",
     bio: Optional[str] = None,
-    gmail: Optional[str] = None, 
+    gmail: Optional[str] = None,
     points: int = 0,
-    is_admin: bool = False
+    is_admin: bool = False,
 ) -> None:
     conn = get_conn()
+
+    # ตั้งค่าเพื่อให้ดึงข้อมูลผ่านชื่อ Column เช่น row['emp_id'] ได้ไม่ให้อีก
+    conn.row_factory = sqlite3.Row
+
     conn.execute(
         """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -569,34 +576,53 @@ async def add_employee(
                contact_email = COALESCE(excluded.contact_email, employees.contact_email),
                points = excluded.points,
                is_admin = excluded.is_admin""",
-        (str(member.id), emp_id, nickname, position, mbti, bio, gmail, points, int(is_admin)),
+        (
+            str(member.id),
+            emp_id,
+            nickname,
+            position,
+            mbti,
+            bio,
+            gmail,
+            points,
+            int(is_admin),
+        ),
     )
     conn.commit()
-    
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+
+    row = conn.execute(
+        "SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)
+    ).fetchone()
     conn.close()
 
     embed = discord.Embed(
-
-
-
-        
-        title="✨ Operative Profile Saved", 
-        description=f"Successfully updated employee record for {m
-                                                                ember.mention}",
-        color=0x34D399
+        title="✨ Operative Profile Saved",
+        description=f"Successfully updated employee record for {member.mention}",
+        color=0x34D399,
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True)
-    embed.add_field(name="🏷️ Nickname", value=row['nickname'], inline=True)
-    embed.add_field(name="💼 Position", value=row['position'], inline=True)
-    embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
-    embed.add_field(name="✉️ Gmail", value=row['contact_email'] or "N/A", inline=True)
-    embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
-    embed.add_field(name="🛠️ Portal Admin", value="✅ Yes" if row['is_admin'] else "❌ No", inline=False)
-    
-    if row['bio']:
-        embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
+    embed.add_field(
+        name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True
+    )
+    embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
+    embed.add_field(name="💼 Position", value=row["position"], inline=True)
+    embed.add_field(name="🧩 MBTI", value=row["mbti"], inline=True)
+    embed.add_field(
+        name="✉️ Gmail", value=row["contact_email"] or "N/A", inline=True
+    )
+    embed.add_field(
+        name="💰 Points", value=f"**{row['points']}** pts", inline=True
+    )
+    embed.add_field(
+        name="🛠️ Portal Admin",
+        value="✅ Yes" if row["is_admin"] else "❌ No",
+        inline=False,
+    )
+
+    if row["bio"]:
+        embed.add_field(
+            name="📝 Biography", value=f"> {row['bio']}", inline=False
+        )
 
     await interaction.response.send_message(embed=embed)
 
