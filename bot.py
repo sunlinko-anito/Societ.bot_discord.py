@@ -3,6 +3,9 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import datetime
 from zoneinfo import ZoneInfo
+import random
+import typing
+from typing import Optional
 
 import config
 from database import get_db
@@ -20,7 +23,6 @@ class SocietBot(commands.Bot):
         await self.tree.sync()
         if not check_meetings.is_running():
             check_meetings.start()
-        # นำ web_runner ออกจากตรงนี้ ป้องกัน Bot ค้าง
 
 bot = SocietBot()
 
@@ -54,8 +56,9 @@ async def check_meetings():
         await db.commit()
 
 
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+# --------------------------------------------------------------------------------------
+# SLASH COMMANDS
+# --------------------------------------------------------------------------------------
 
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
@@ -63,11 +66,9 @@ async def check_meetings():
 async def test_welcome(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
-    row = cursor.fetchone()
-    conn.close()
+    async with await get_db() as db:
+        async with db.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,)) as cursor:
+            row = await cursor.fetchone()
 
     if row and row["welcome_channel_id"]:
         channel = interaction.guild.get_channel(row["welcome_channel_id"])
@@ -92,11 +93,9 @@ async def test_welcome(interaction: discord.Interaction):
 async def test_log(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,))
-    row = cursor.fetchone()
-    conn.close()
+    async with await get_db() as db:
+        async with db.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (interaction.guild.id,)) as cursor:
+            row = await cursor.fetchone()
 
     if row and row["log_channel_id"]:
         log_channel = interaction.guild.get_channel(row["log_channel_id"])
@@ -124,24 +123,23 @@ async def setup_systems(
     voice_category: Optional[discord.CategoryChannel] = None
 ):
     guild_id = interaction.guild.id
-    conn = get_conn()
-    cursor = conn.cursor()
 
-    cursor.execute("SELECT guild_id FROM settings WHERE guild_id = ?", (guild_id,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO settings (guild_id) VALUES (?)", (guild_id,))
+    async with await get_db() as db:
+        async with db.execute("SELECT guild_id FROM settings WHERE guild_id = ?", (guild_id,)) as cursor:
+            if not await cursor.fetchone():
+                await db.execute("INSERT INTO settings (guild_id) VALUES (?)", (guild_id,))
 
-    if welcome_channel:
-        cursor.execute("UPDATE settings SET welcome_channel_id = ? WHERE guild_id = ?", (welcome_channel.id, guild_id))
-    if log_channel:
-        cursor.execute("UPDATE settings SET log_channel_id = ? WHERE guild_id = ?", (log_channel.id, guild_id))
-    if voice_master_channel:
-        cursor.execute("UPDATE settings SET voice_master_id = ? WHERE guild_id = ?", (voice_master_channel.id, guild_id))
-    if voice_category:
-        cursor.execute("UPDATE settings SET voice_category_id = ? WHERE guild_id = ?", (voice_category.id, guild_id))
+        if welcome_channel:
+            await db.execute("UPDATE settings SET welcome_channel_id = ? WHERE guild_id = ?", (welcome_channel.id, guild_id))
+        if log_channel:
+            await db.execute("UPDATE settings SET log_channel_id = ? WHERE guild_id = ?", (log_channel.id, guild_id))
+        if voice_master_channel:
+            await db.execute("UPDATE settings SET voice_master_id = ? WHERE guild_id = ?", (voice_master_channel.id, guild_id))
+        if voice_category:
+            await db.execute("UPDATE settings SET voice_category_id = ? WHERE guild_id = ?", (voice_category.id, guild_id))
 
-    conn.commit()
-    conn.close()
+        await db.commit()
+
     await interaction.response.send_message("⚙️ อัปเดตการตั้งค่าระบบแล้ว!", ephemeral=True)
 
 
@@ -179,14 +177,12 @@ async def meeting(
 
         save_time_str = input_time.strftime("%Y-%m-%d %H:%M")
 
-        conn = get_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO schedules (topic, meeting_time, channel_id, mention_id) VALUES (?, ?, ?, ?)",
-            (topic, save_time_str, channel.id, mention_target.id)
-        )
-        conn.commit()
-        conn.close()
+        async with await get_db() as db:
+            await db.execute(
+                "INSERT INTO schedules (topic, meeting_time, channel_id, mention_id) VALUES (?, ?, ?, ?)",
+                (topic, save_time_str, channel.id, mention_target.id)
+            )
+            await db.commit()
 
         embed = discord.Embed(
             title="💾 บันทึกการนัดหมายประชุมสำเร็จ", 
@@ -206,11 +202,9 @@ async def meeting(
 
 @bot.tree.command(name="meeting_list", description="ดูรายการนัดหมายประชุมทั้งหมด")
 async def meeting_list(interaction: discord.Interaction):
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, topic, meeting_time FROM schedules WHERE is_done = 0")
-    rows = cursor.fetchall()
-    conn.close()
+    async with await get_db() as db:
+        async with db.execute("SELECT id, topic, meeting_time FROM schedules WHERE is_done = 0") as cursor:
+            rows = await cursor.fetchall()
 
     if not rows:
         await interaction.response.send_message("📅 ไม่มีนัดหมายที่ค้างอยู่", ephemeral=True)
@@ -230,20 +224,16 @@ async def meeting_list(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 @bot.tree.command(name="meeting_delete", description="ลบนัดหมายที่ทำผิด โดยใช้ ID")
 async def meeting_delete(interaction: discord.Interaction, db_id: int):
-    conn = get_conn()
-    cursor = conn.cursor()
+    async with await get_db() as db:
+        async with db.execute("SELECT topic FROM schedules WHERE id = ? AND is_done = 0", (db_id,)) as cursor:
+            row = await cursor.fetchone()
 
-    cursor.execute("SELECT topic FROM schedules WHERE id = ? AND is_done = 0", (db_id,))
-    row = cursor.fetchone()
+        if not row:
+            await interaction.response.send_message(f"❌ ไม่พบนัดหมายรหัส ID: {db_id}", ephemeral=True)
+            return
 
-    if not row:
-        await interaction.response.send_message(f"❌ ไม่พบนัดหมายรหัส ID: {db_id}", ephemeral=True)
-        conn.close()
-        return
-
-    cursor.execute("DELETE FROM schedules WHERE id = ?", (db_id,))
-    conn.commit()
-    conn.close()
+        await db.execute("DELETE FROM schedules WHERE id = ?", (db_id,))
+        await db.commit()
 
     await interaction.response.send_message(f"🗑️ ลบนัดหมาย ID: {db_id} ({row['topic']}) เรียบร้อยแล้ว")
 
@@ -267,25 +257,25 @@ async def add_employee(
     points: int = 0,
     is_admin: bool = False
 ) -> None:
-    conn = get_conn()
-    conn.execute(
-        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(discord_id) DO UPDATE SET
-               emp_id = excluded.emp_id,
-               nickname = excluded.nickname,
-               position = excluded.position,
-               mbti = excluded.mbti,
-               bio = COALESCE(excluded.bio, employees.bio),
-               contact_email = COALESCE(excluded.contact_email, employees.contact_email),
-               points = excluded.points,
-               is_admin = excluded.is_admin""",
-        (str(member.id), emp_id, nickname, position, mbti, bio, gmail, points, int(is_admin)),
-    )
-    conn.commit()
-    
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    conn.close()
+    async with await get_db() as db:
+        await db.execute(
+            """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(discord_id) DO UPDATE SET
+                   emp_id = excluded.emp_id,
+                   nickname = excluded.nickname,
+                   position = excluded.position,
+                   mbti = excluded.mbti,
+                   bio = COALESCE(excluded.bio, employees.bio),
+                   contact_email = COALESCE(excluded.contact_email, employees.contact_email),
+                   points = excluded.points,
+                   is_admin = excluded.is_admin""",
+            (str(member.id), emp_id, nickname, position, mbti, bio, gmail, points, int(is_admin)),
+        )
+        await db.commit()
+        
+        async with db.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)) as cursor:
+            row = await cursor.fetchone()
 
     embed = discord.Embed(
         title="✨ Operative Profile Saved", 
@@ -309,9 +299,9 @@ async def add_employee(
 
 @bot.tree.command(name="list_employees", description="👥 View all employee records in the system")
 async def list_employees(interaction: discord.Interaction):
-    conn = get_conn()
-    rows = conn.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees").fetchall()
-    conn.close()
+    async with await get_db() as db:
+        async with db.execute("SELECT discord_id, emp_id, nickname, position, mbti FROM employees") as cursor:
+            rows = await cursor.fetchall()
 
     if not rows:
         await interaction.response.send_message("📭 No employee records found in the system.", ephemeral=True)
@@ -335,9 +325,9 @@ async def list_employees(interaction: discord.Interaction):
 
 @bot.tree.command(name="view_employee", description="📋 View detailed profile of a specific operative")
 async def view_employee(interaction: discord.Interaction, member: discord.Member):
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    conn.close()
+    async with await get_db() as db:
+        async with db.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)) as cursor:
+            row = await cursor.fetchone()
 
     if not row:
         await interaction.response.send_message(f"❌ No records found for {member.mention}", ephemeral=True)
@@ -367,17 +357,16 @@ async def view_employee(interaction: discord.Interaction, member: discord.Member
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 async def delete_employee(interaction: discord.Interaction, member: discord.Member):
-    conn = get_conn()
-    row = conn.execute("SELECT nickname FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    
-    if not row:
-        conn.close()
-        await interaction.response.send_message(f"❌ No records found for {member.mention}", ephemeral=True)
-        return
+    async with await get_db() as db:
+        async with db.execute("SELECT nickname FROM employees WHERE discord_id = ?", (str(member.id),)) as cursor:
+            row = await cursor.fetchone()
+        
+        if not row:
+            await interaction.response.send_message(f"❌ No records found for {member.mention}", ephemeral=True)
+            return
 
-    conn.execute("DELETE FROM employees WHERE discord_id = ?", (str(member.id),))
-    conn.commit()
-    conn.close()
+        await db.execute("DELETE FROM employees WHERE discord_id = ?", (str(member.id),))
+        await db.commit()
 
     embed = discord.Embed(
         title="🗑️ Record Deleted",
@@ -397,17 +386,14 @@ async def rd_employee(
     position: typing.Optional[str] = None,
     channel: typing.Optional[discord.TextChannel] = None
 ):
-    conn = get_conn()
-    
-    # กรองข้อมูลตามตำแหน่งถ้ามีการระบุ
-    if position:
-        rows = conn.execute("SELECT * FROM employees WHERE position = ?", (position,)).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM employees").fetchall()
-        
-    conn.close()
+    async with await get_db() as db:
+        if position:
+            async with db.execute("SELECT * FROM employees WHERE position = ?", (position,)) as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute("SELECT * FROM employees") as cursor:
+                rows = await cursor.fetchall()
 
-    # หากไม่พบข้อมูล
     if not rows:
         no_data_msg = f"📭 ไม่พบรายชื่อพนักงานในตำแหน่ง `{position}`" if position else "📭 No operatives found in the database."
         await interaction.response.send_message(no_data_msg, ephemeral=True)
@@ -423,75 +409,20 @@ async def rd_employee(
     embed.add_field(name="🏷️ Nickname", value=chosen['nickname'], inline=True)
     embed.add_field(name="💼 Position", value=chosen['position'], inline=True)
 
-    # ตรวจสอบว่าต้องส่งไปที่ช่องไหน
     target_channel = channel or interaction.channel
 
     if target_channel == interaction.channel:
-        # หากส่งในช่องปัจจุบัน สามารถตอบกลับ Interaction ได้เลย
         await interaction.response.send_message(embed=embed)
     else:
-        # หากส่งไปช่องอื่น ให้ส่ง Embed ไปที่ช่องนั้น แล้วตอบกลับผู้ใช้แบบ Ephemeral (เห็นคนเดียว)
         await target_channel.send(embed=embed)
         await interaction.response.send_message(f"✅ สุ่มสำเร็จ! ส่งผลลัพธ์ไปที่ช่อง {target_channel.mention} เรียบร้อยแล้ว", ephemeral=True)
 
-"""
-@bot.tree.command(name="work", description="🔨 ทำงานประจำวันเพื่อรับแต้มสะสม")
-async def work(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
-    now = time.time()
-    cooldown_seconds = 3600  # คูลดาวน์ 1 ชั่วโมง
-
-    if user_id in work_cooldowns:
-        remaining = int(work_cooldowns[user_id] + cooldown_seconds - now)
-        if remaining > 0:
-            minutes, seconds = divmod(remaining, 60)
-            await interaction.response.send_message(
-                f"⏳ คุณเพิ่งทำงานไป! โปรดรออีก **{minutes} นาที {seconds} วินาที** ก่อนทำงานครั้งถัดไป",
-                ephemeral=True
-            )
-            return
-
-    conn = get_conn()
-    emp_row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (user_id,)).fetchone()
-    if not emp_row:
-        conn.close()
-        await interaction.response.send_message(
-            "❌ คุณยังไม่ได้ลงทะเบียนเป็นพนักงานในระบบ (ติดต่อ Admin เพื่อลงทะเบียน)",
-            ephemeral=True
-        )
-        return
-
-    earned = random.randint(15, 50)
-    conn.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (earned, user_id))
-    conn.commit()
-    new_points = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (user_id,)).fetchone()["points"]
-    conn.close()
-
-    work_cooldowns[user_id] = now
-
-    work_messages = [
-        f"💻 **{emp_row['nickname']}** เขียนโค้ดระบบ backend สำเร็จ!",
-        f"🎨 **{emp_row['nickname']}** ออกแบบ UI/UX หน้าใหม่สวยงาม!",
-        f"🐛 **{emp_row['nickname']}** แก้ไข Bug ร้ายแรงในเกมสำเร็จ!",
-        f"🎮 **{emp_row['nickname']}** ทดสอบระบบเกมอย่างเข้มข้น!",
-        f"📄 **{emp_row['nickname']}** เขียน Game Design Document เสร็จสมบูรณ์!"
-    ]
-
-    embed = discord.Embed(
-        title="🔨 ทำงานสำเร็จ!",
-        description=random.choice(work_messages),
-        color=0x38BDF8
-    )
-    embed.add_field(name="💰 แต้มที่ได้รับ", value=f"+**{earned}** pts", inline=True)
-    embed.add_field(name="💳 แต้มสะสมรวม", value=f"**{new_points}** pts", inline=True)
-    await interaction.response.send_message(embed=embed)
-"""
 
 @bot.tree.command(name="work", description="ทำงาน")
 async def work(interaction: discord.Interaction, member: discord.Member, task: str):
     embed = discord.Embed(
         title="⚠️ get back to work!",
-        description=f"📢 {member.mention} ทำงานด้วย!\n\n**📌",
+        description=f"📢 {member.mention} ทำงานด้วย!\n\n**📌 {task}**",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -500,33 +431,36 @@ async def work(interaction: discord.Interaction, member: discord.Member, task: s
     
     await interaction.response.send_message(content=member.mention, embed=embed)
 
+
 @bot.tree.command(name="points_give", description="💰 มอบแต้มให้พนักงาน (เฉพาะ Admin ของเว็บ/ระบบ)")
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 async def points_give(interaction: discord.Interaction, member: discord.Member, amount: int):
-    conn = get_conn()
-    admin_row = conn.execute("SELECT is_admin FROM employees WHERE discord_id = ?", (str(interaction.user.id),)).fetchone()
-    
-    if not admin_row or not admin_row["is_admin"]:
-        conn.close()
-        await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ Admin ในระบบ ไม่สามารถแจกแต้มได้", ephemeral=True)
-        return
+    async with await get_db() as db:
+        async with db.execute("SELECT is_admin FROM employees WHERE discord_id = ?", (str(interaction.user.id),)) as cursor:
+            admin_row = await cursor.fetchone()
         
-    if amount <= 0:
-        conn.close()
-        await interaction.response.send_message("❌ จำนวนแต้มต้องมากกว่า 0", ephemeral=True)
-        return
+        if not admin_row or not admin_row["is_admin"]:
+            await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ Admin ในระบบ ไม่สามารถแจกแต้มได้", ephemeral=True)
+            return
+            
+        if amount <= 0:
+            await interaction.response.send_message("❌ จำนวนแต้มต้องมากกว่า 0", ephemeral=True)
+            return
 
-    emp_row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
-    if not emp_row:
-        conn.close()
-        await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานสำหรับ {member.mention}", ephemeral=True)
-        return
+        async with db.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)) as cursor:
+            emp_row = await cursor.fetchone()
 
-    conn.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (amount, str(member.id)))
-    conn.commit()
-    new_points = conn.execute("SELECT points FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()["points"]
-    conn.close()
+        if not emp_row:
+            await interaction.response.send_message(f"❌ ไม่พบข้อมูลพนักงานสำหรับ {member.mention}", ephemeral=True)
+            return
+
+        await db.execute("UPDATE employees SET points = points + ? WHERE discord_id = ?", (amount, str(member.id)))
+        await db.commit()
+
+        async with db.execute("SELECT points FROM employees WHERE discord_id = ?", (str(member.id),)) as cursor:
+            res = await cursor.fetchone()
+            new_points = res["points"]
 
     embed = discord.Embed(
         title="💰 มอบแต้มสำเร็จ!",
