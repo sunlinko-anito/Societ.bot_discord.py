@@ -1,42 +1,38 @@
-"""Societ Game Studio - Discord bot + REST API backend.
-
-Runs a discord.py bot and an aiohttp web server in the same event loop:
-
-* Slash commands: /test_welcome, /test_log, /setup_systems, /send_ticket_button,
-                 /meeting, /meeting_list, /meeting_delete, /add_employee, 
-                 /list_employees, /view_employee, /delete_employee, /rd_employee,
-                 /work, /points_give
-* REST API for the web frontend (roster, portfolio, store, redemptions)
-* Discord OAuth2 login with signed-cookie sessions and RBAC (guest/employee/admin)
-* SQLite3 persistence in database.db
-"""
-
 import asyncio
+import os
+import discord
+import aiosqlite
+from aiohttp import web
+import aiohttp_jinja2
+import jinja2
+from aiohttp_session import setup as setup_session, get_session
+from aiohttp_session.cookie_storage import EncryptedCookieStorage
+import aiohttp
+from dotenv import load_dotenv
 import base64
 import datetime
 import hashlib
 import hmac
 import json
-import os
 import random
 import secrets
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-
-import aiohttp
-import discord
-from aiohttp import web
+import typing
 from discord import app_commands
 from discord.ext import commands, tasks
 
+load_dotenv()
+
+# ================= Configs =================
 BASE_DIR = Path(__file__).resolve().parent
 DB_NAME = os.getenv("SOCIET_DB", str(BASE_DIR / "database.db"))
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN", "")
+GUILD_ID = int(os.getenv("GUILD_ID", 0))
 CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:13660/auth/callback")
@@ -45,6 +41,7 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 SESSION_COOKIE = "societ_session"
 SESSION_TTL = 60 * 60 * 24 * 7
 SESSION_SECURE = os.getenv("SESSION_SECURE", "false").lower() == "true"
+ADMIN_ROLE_ID = 1511341249985122485
 
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("PORT", "13660"))
@@ -57,39 +54,12 @@ intents.members = True
 intents.voice_states = True
 
 
-class SocietBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
-
-    async def setup_hook(self) -> None:
-        # ลงทะเบียน Persistent Views เพื่อให้ปุ่มใช้งานได้ถาวร
-        self.add_view(TicketPersistentView())
-        self.add_view(TicketCloseView())
-        # เริ่มการทำงานของ Background Task
-        if not check_meetings.is_running():
-            check_meetings.start()
-
-
-bot = SocietBot()
-work_cooldowns = {}  # พจนานุกรมเก็บเวลาคูลดาวน์สำหรับคำสั่ง /work
-
-
-# --------------------------------------------------------------------------------------
-# DATABASE
-# --------------------------------------------------------------------------------------
-
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_NAME, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db() -> None:
-    """Create every table used by the bot and the web API."""
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("""
+# ================= Database Helper =================
+async def init_db(db: aiosqlite.Connection):
+    """สร้างตารางในฐานข้อมูล (ทำงานครั้งเดียวตอนเปิดบอท)"""
+    await db.execute("PRAGMA foreign_keys = ON")
+    
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -100,8 +70,7 @@ def init_db() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    cursor.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS store_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -112,31 +81,7 @@ def init_db() -> None:
             is_active INTEGER DEFAULT 1
         )
     """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            discord_id TEXT NOT NULL,
-            item_id INTEGER NOT NULL,
-            points_spent INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(discord_id) REFERENCES employees(discord_id),
-            FOREIGN KEY(item_id) REFERENCES store_items(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS schedules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            topic TEXT NOT NULL,
-            meeting_time TEXT NOT NULL,
-            channel_id INTEGER NOT NULL,
-            mention_id INTEGER NOT NULL,
-            is_done INTEGER DEFAULT 0
-        )
-    """)
-
-    cursor.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS employees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             discord_id TEXT UNIQUE NOT NULL,
@@ -150,8 +95,28 @@ def init_db() -> None:
             is_admin INTEGER DEFAULT 0
         )
     """)
-
-    cursor.execute("""
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            discord_id TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            points_spent INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(discord_id) REFERENCES employees(discord_id),
+            FOREIGN KEY(item_id) REFERENCES store_items(id)
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic TEXT NOT NULL,
+            meeting_time TEXT NOT NULL,
+            channel_id INTEGER NOT NULL,
+            mention_id INTEGER NOT NULL,
+            is_done INTEGER DEFAULT 0
+        )
+    """)
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             guild_id INTEGER PRIMARY KEY,
             welcome_channel_id INTEGER,
@@ -160,96 +125,15 @@ def init_db() -> None:
             voice_category_id INTEGER
         )
     """)
-
-    cursor.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             ticket_channel_id INTEGER PRIMARY KEY,
             user_id INTEGER,
             status TEXT DEFAULT 'open'
         )
     """)
-
-    conn.commit()
-    conn.close()
+    await db.commit()
     print("[Database] Tables ready in", DB_NAME)
-
-
-# --------------------------------------------------------------------------------------
-# DISCORD EVENTS
-# --------------------------------------------------------------------------------------
-
-@bot.event
-async def on_member_join(member):
-    """เมื่อมีคนเข้าเซิร์ฟเวอร์"""
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (member.guild.id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if row and row["welcome_channel_id"]:
-        channel = member.guild.get_channel(row["welcome_channel_id"])
-        if channel:
-            embed = discord.Embed(
-                title="🎉 ยินดีต้อนรับ! 🎉",
-                description=f"ยินดีต้อนรับ {member.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            await channel.send(embed=embed)
-
-
-@bot.event
-async def on_message_delete(message):
-    """Log เมื่อมีคนลบข้อความ"""
-    if message.author.bot or not message.guild:
-        return
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (message.guild.id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if row and row["log_channel_id"]:
-        log_channel = message.guild.get_channel(row["log_channel_id"])
-        if log_channel:
-            embed = discord.Embed(title="🗑️ ข้อความถูกลบ", color=discord.Color.red(), timestamp=message.created_at)
-            embed.add_field(name="คนพิมพ์", value=message.author.mention)
-            embed.add_field(name="ช่อง", value=message.channel.mention)
-            embed.add_field(name="ข้อความที่ลบ", value=message.content or "[ไม่มีข้อความตัวอักษร]", inline=False)
-            await log_channel.send(embed=embed)
-
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    """ตรวจจับการเข้า-ออกห้องเสียง"""
-    if not member.guild:
-        return
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT voice_master_id, voice_category_id FROM settings WHERE guild_id = ?", (member.guild.id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        return
-    master_id, category_id = row["voice_master_id"], row["voice_category_id"]
-
-    if after.channel and after.channel.id == master_id:
-        category = member.guild.get_channel(category_id) if category_id else None
-
-        new_channel = await member.guild.create_voice_channel(
-            name=f"💻│ ห้องทำงานของ {member.display_name}",
-            category=category
-        )
-        await member.move_to(new_channel)
-
-    if before.channel and before.channel.id != master_id:
-        if before.channel.category_id == category_id and before.channel.name.startswith("💻│") and len(before.channel.members) == 0:
-            try:
-                await before.channel.delete()
-            except Exception as e:
-                print(f"❌ ไม่สามารถลบห้องเสียงได้: {e}")
 
 
 # --------------------------------------------------------------------------------------
@@ -264,6 +148,7 @@ class TicketPersistentView(discord.ui.View):
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         user = interaction.user
+        db = interaction.client.db  # ดึง Connection จาก Client
 
         await interaction.response.defer(ephemeral=True)
 
@@ -278,11 +163,8 @@ class TicketPersistentView(discord.ui.View):
             overwrites=overwrites
         )
 
-        conn = get_conn()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO tickets (ticket_channel_id, user_id) VALUES (?, ?)", (ticket_channel.id, user.id))
-        conn.commit()
-        conn.close()
+        await db.execute("INSERT INTO tickets (ticket_channel_id, user_id) VALUES (?, ?)", (ticket_channel.id, user.id))
+        await db.commit()
 
         embed = discord.Embed(
             title="🎫 Ticket ติดต่อแอดมิน",
@@ -299,17 +181,123 @@ class TicketCloseView(discord.ui.View):
 
     @discord.ui.button(label="🔒 ปิด Ticket", style=discord.ButtonStyle.danger, custom_id="press_close_ticket")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = interaction.client.db
         await interaction.response.send_message("กำลังปิดและลบห้องนี้ใน 5 วินาที...")
 
-        conn = get_conn()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM tickets WHERE ticket_channel_id = ?", (interaction.channel.id,))
-        conn.commit()
-        conn.close()
+        await db.execute("DELETE FROM tickets WHERE ticket_channel_id = ?", (interaction.channel.id,))
+        await db.commit()
 
         await asyncio.sleep(5)
         await interaction.channel.delete()
 
+
+# --------------------------------------------------------------------------------------
+# BOT CORE
+# --------------------------------------------------------------------------------------
+
+class SocietBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.db: aiosqlite.Connection = None # เตรียมตัวแปรเก็บ DB Connection
+
+    async def setup_hook(self) -> None:
+        # 1. Initialize Persistent Database Connection
+        self.db = await aiosqlite.connect(DB_NAME)
+        self.db.row_factory = aiosqlite.Row
+        await init_db(self.db)
+        
+        await self.tree.sync()
+        
+        # 2. Add Persistent Views
+        self.add_view(TicketPersistentView())
+        self.add_view(TicketCloseView())
+        
+        # 3. Start Background Tasks
+        if not check_meetings.is_running():
+            check_meetings.start()
+            
+        # 4. Start Web Server
+        self.web_app = build_app(self)
+        self.web_runner = web.AppRunner(self.web_app)
+        await self.web_runner.setup()
+        site = web.TCPSite(self.web_runner, WEB_HOST, WEB_PORT)
+        await site.start()
+        print(f"[Web] Societ portal listening on http://{WEB_HOST}:{WEB_PORT}")
+
+    async def close(self):
+        if self.db:
+            await self.db.close()
+        if hasattr(self, "web_runner"):
+            await self.web_runner.cleanup()
+        await super().close()
+
+bot = SocietBot()
+
+# --------------------------------------------------------------------------------------
+# DISCORD EVENTS & TASKS
+# --------------------------------------------------------------------------------------
+
+@bot.event
+async def on_ready():
+    print(f"[Bot] Logged in as {bot.user}")
+
+@bot.event
+async def on_member_join(member):
+    async with bot.db.execute("SELECT welcome_channel_id FROM settings WHERE guild_id = ?", (member.guild.id,)) as cursor:
+        row = await cursor.fetchone()
+
+    if row and row["welcome_channel_id"]:
+        channel = member.guild.get_channel(row["welcome_channel_id"])
+        if channel:
+            embed = discord.Embed(
+                title="🎉 ยินดีต้อนรับ! 🎉",
+                description=f"ยินดีต้อนรับ {member.mention} เข้าทำงาน!\nตั้งใจทำงานนะ!",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await channel.send(embed=embed)
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot or not message.guild:
+        return
+    async with bot.db.execute("SELECT log_channel_id FROM settings WHERE guild_id = ?", (message.guild.id,)) as cursor:
+        row = await cursor.fetchone()
+
+    if row and row["log_channel_id"]:
+        log_channel = message.guild.get_channel(row["log_channel_id"])
+        if log_channel:
+            embed = discord.Embed(title="🗑️ ข้อความถูกลบ", color=discord.Color.red(), timestamp=message.created_at)
+            embed.add_field(name="คนพิมพ์", value=message.author.mention)
+            embed.add_field(name="ช่อง", value=message.channel.mention)
+            embed.add_field(name="ข้อความที่ลบ", value=message.content or "[ไม่มีข้อความตัวอักษร]", inline=False)
+            await log_channel.send(embed=embed)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if not member.guild:
+        return
+    async with bot.db.execute("SELECT voice_master_id, voice_category_id FROM settings WHERE guild_id = ?", (member.guild.id,)) as cursor:
+        row = await cursor.fetchone()
+
+    if not row:
+        return
+    master_id, category_id = row["voice_master_id"], row["voice_category_id"]
+
+    if after.channel and after.channel.id == master_id:
+        category = member.guild.get_channel(category_id) if category_id else None
+        new_channel = await member.guild.create_voice_channel(
+            name=f"💻│ ห้องทำงานของ {member.display_name}",
+            category=category
+        )
+        await member.move_to(new_channel)
+
+    if before.channel and before.channel.id != master_id:
+        if before.channel.category_id == category_id and before.channel.name.startswith("💻│") and len(before.channel.members) == 0:
+            try:
+                await before.channel.delete()
+            except Exception as e:
+                print(f"❌ ไม่สามารถลบห้องเสียงได้: {e}")
 
 @tasks.loop(seconds=30)
 async def check_meetings():
@@ -317,14 +305,8 @@ async def check_meetings():
     now_tz = now.astimezone(ZoneInfo("Asia/Bangkok"))
     now_str = now_tz.strftime("%Y-%m-%d %H:%M")
 
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT id, topic, channel_id, mention_id FROM schedules WHERE meeting_time <= ? AND is_done = 0", 
-        (now_str,)
-    )
-    meetings = cursor.fetchall()
+    async with bot.db.execute("SELECT id, topic, channel_id, mention_id FROM schedules WHERE meeting_time <= ? AND is_done = 0", (now_str,)) as cursor:
+        meetings = await cursor.fetchall()
 
     for meeting in meetings:
         db_id, topic, channel_id, mention_id = meeting["id"], meeting["topic"], meeting["channel_id"], meeting["mention_id"]
@@ -337,630 +319,16 @@ async def check_meetings():
                 color=discord.Color.red(),
                 timestamp=datetime.datetime.now()
             )
-
             mention_text = f"<@&{mention_id}>" if channel.guild.get_role(mention_id) else f"<@{mention_id}>"
-
             try:
                 await channel.send(content=mention_text, embed=alert_embed)
             except Exception as e:
                 print(f"❌ ไม่สามารถส่งข้อความแจ้งเตือนได้: {e}")
 
-        cursor.execute("UPDATE schedules SET is_done = 1 WHERE id = ?", (db_id,))
-
-    conn.commit()
-    conn.close()
-
-
-def fetch_employee(discord_id: str) -> Optional[sqlite3.Row]:
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(discord_id),)).fetchone()
-    conn.close()
-    return row
-
-
-def employee_public(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "discord_id": row["discord_id"],
-        "nickname": row["nickname"],
-        "position": row["position"],
-        "bio": row["bio"],
-        "contact_email": row["contact_email"],
-        "points": row["points"],
-        "is_admin": bool(row["is_admin"]),
-    }
-
-
-# --------------------------------------------------------------------------------------
-# SESSION HANDLING
-# --------------------------------------------------------------------------------------
-
-def _b64e(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
-def _b64d(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-
-
-def sign_session(payload: dict) -> str:
-    body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
-    signature = hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
-    return f"{body}.{_b64e(signature)}"
-
-
-def read_session(token: Optional[str]) -> Optional[dict]:
-    if not token or "." not in token:
-        return None
-    body, signature = token.rsplit(".", 1)
-    expected = hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
-    try:
-        if not hmac.compare_digest(expected, _b64d(signature)):
-            return None
-        payload = json.loads(_b64d(body))
-    except (ValueError, json.JSONDecodeError):
-        return None
-    if payload.get("exp", 0) < time.time():
-        return None
-    return payload
-
-
-def current_user(request: web.Request) -> Optional[dict]:
-    payload = read_session(request.cookies.get(SESSION_COOKIE))
-    if not payload:
-        return None
-    row = fetch_employee(payload["discord_id"])
-    if not row:
-        return {
-            "discord_id": payload["discord_id"],
-            "username": payload.get("username"),
-            "avatar_url": payload.get("avatar_url"),
-            "role": "guest",
-            "employee": None,
-        }
-    return {
-        "discord_id": row["discord_id"],
-        "username": payload.get("username"),
-        "avatar_url": payload.get("avatar_url"),
-        "role": "admin" if row["is_admin"] else "employee",
-        "employee": employee_public(row),
-    }
-
-
-Handler = Callable[[web.Request], Coroutine[Any, Any, web.StreamResponse]]
-
-
-def require_employee(handler: Handler) -> Handler:
-    async def wrapper(request: web.Request) -> web.StreamResponse:
-        user = current_user(request)
-        if not user or user["role"] == "guest":
-            raise web.HTTPUnauthorized(text=json.dumps({"error": "employee_login_required"}),
-                                       content_type="application/json")
-        request["user"] = user
-        return await handler(request)
-    return wrapper
-
-
-def require_admin(handler: Handler) -> Handler:
-    async def wrapper(request: web.Request) -> web.StreamResponse:
-        user = current_user(request)
-        if not user or user["role"] != "admin":
-            raise web.HTTPForbidden(text=json.dumps({"error": "admin_only"}),
-                                    content_type="application/json")
-        request["user"] = user
-        return await handler(request)
-    return wrapper
-
-
-async def read_json(request: web.Request) -> dict:
-    try:
-        data = await request.json()
-    except (json.JSONDecodeError, ValueError):
-        raise web.HTTPBadRequest(text=json.dumps({"error": "invalid_json"}),
-                                 content_type="application/json")
-    if not isinstance(data, dict):
-        raise web.HTTPBadRequest(text=json.dumps({"error": "invalid_json"}),
-                                 content_type="application/json")
-    return data
-
-
-# --------------------------------------------------------------------------------------
-# DISCORD OAUTH2
-# --------------------------------------------------------------------------------------
-
-async def auth_login(request: web.Request) -> web.StreamResponse:
-    if not CLIENT_ID or not CLIENT_SECRET:
-        return web.json_response({"error": "oauth_not_configured"}, status=503)
-    state = secrets.token_urlsafe(24)
-    params = {
-        "client_id": CLIENT_ID,
-        "redirect_uri": OAUTH_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "identify",
-        "state": state,
-        "prompt": "consent",
-    }
-    response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
-    response.set_cookie(
-        "societ_oauth_state", 
-        state, 
-        max_age=600, 
-        httponly=True, 
-        samesite="Lax",
-        secure=SESSION_SECURE
-    )
-    raise response
-
-
-async def auth_callback(request: web.Request) -> web.StreamResponse:
-    code = request.query.get("code")
-    state = request.query.get("state")
-    cookie_state = request.cookies.get("societ_oauth_state")
-
-    if not code:
-        return web.json_response({"error": "missing_code"}, status=400)
-
-    if cookie_state and state != cookie_state:
-        return web.json_response({"error": "invalid_oauth_state"}, status=400)
-
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": OAUTH_REDIRECT_URI,
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{DISCORD_API}/oauth2/token", data=data) as resp:
-            if resp.status != 200:
-                return web.json_response({"error": "token_exchange_failed"}, status=502)
-            token_data = await resp.json()
-        headers = {"Authorization": f"Bearer {token_data['access_token']}"}
-        async with session.get(f"{DISCORD_API}/users/@me", headers=headers) as resp:
-            if resp.status != 200:
-                return web.json_response({"error": "profile_fetch_failed"}, status=502)
-            profile = await resp.json()
-
-    avatar = profile.get("avatar")
-    avatar_url = (
-        f"https://cdn.discordapp.com/avatars/{profile['id']}/{avatar}.png"
-        if avatar
-        else f"https://cdn.discordapp.com/embed/avatars/{(int(profile['id']) >> 22) % 6}.png"
-    )
-    payload = {
-        "discord_id": str(profile["id"]),
-        "username": profile.get("global_name") or profile.get("username"),
-        "avatar_url": avatar_url,
-        "exp": int(time.time()) + SESSION_TTL,
-    }
-    response = web.HTTPFound("/")
-    response.set_cookie(
-        SESSION_COOKIE,
-        sign_session(payload),
-        max_age=SESSION_TTL,
-        path="/",
-        httponly=True,
-        samesite="Lax",
-        secure=SESSION_SECURE
-    )
-    if "societ_oauth_state" in request.cookies:
-        response.del_cookie("societ_oauth_state", path="/")
-    raise response
-
-
-async def auth_logout(request: web.Request) -> web.StreamResponse:
-    response = web.json_response({"ok": True})
-    response.del_cookie(SESSION_COOKIE)
-    return response
-
-
-async def api_me(request: web.Request) -> web.StreamResponse:
-    user = current_user(request)
-    if not user:
-        return web.json_response({"authenticated": False, "role": "guest"})
-    return web.json_response({"authenticated": True, **user})
-
-
-# --------------------------------------------------------------------------------------
-# REST API (EMPLOYEE & PUBLIC)
-# --------------------------------------------------------------------------------------
-
-async def api_employees(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM employees ORDER BY is_admin DESC, nickname ASC").fetchall()
-    conn.close()
-    return web.json_response([employee_public(row) for row in rows])
-
-
-async def api_games(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM games ORDER BY created_at DESC, id DESC").fetchall()
-    conn.close()
-    return web.json_response([dict(row) for row in rows])
-
-
-@require_employee
-async def api_store_items(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM store_items WHERE is_active = 1 ORDER BY price_points ASC"
-    ).fetchall()
-    conn.close()
-    return web.json_response([dict(row) for row in rows])
-
-
-async def send_admin_webhook(content: str, embed: Optional[dict] = None) -> None:
-    if not ADMIN_WEBHOOK_URL:
-        return
-    payload: dict = {"content": content}
-    if embed:
-        payload["embeds"] = [embed]
-    try:
-        async with aiohttp.ClientSession() as session:
-            await session.post(ADMIN_WEBHOOK_URL, json=payload)
-    except aiohttp.ClientError as exc:
-        print(f"[Webhook] failed to notify admins: {exc}")
-
-
-@require_employee
-async def api_store_redeem(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    try:
-        item_id = int(body.get("item_id"))
-    except (TypeError, ValueError):
-        return web.json_response({"error": "item_id_required"}, status=400)
-
-    discord_id = request["user"]["discord_id"]
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        item = conn.execute(
-            "SELECT * FROM store_items WHERE id = ? AND is_active = 1", (item_id,)
-        ).fetchone()
-        if not item:
-            conn.rollback()
-            return web.json_response({"error": "item_not_found"}, status=404)
-        if item["stock"] == 0:
-            conn.rollback()
-            return web.json_response({"error": "out_of_stock"}, status=409)
-
-        employee = conn.execute(
-            "SELECT * FROM employees WHERE discord_id = ?", (discord_id,)
-        ).fetchone()
-        if employee["points"] < item["price_points"]:
-            conn.rollback()
-            return web.json_response({"error": "insufficient_points",
-                                      "points": employee["points"],
-                                      "required": item["price_points"]}, status=402)
-
-        conn.execute("UPDATE employees SET points = points - ? WHERE discord_id = ?",
-                     (item["price_points"], discord_id))
-        if item["stock"] > 0:
-            conn.execute("UPDATE store_items SET stock = stock - 1 WHERE id = ?", (item_id,))
-        conn.execute(
-            "INSERT INTO transactions (discord_id, item_id, points_spent) VALUES (?, ?, ?)",
-            (discord_id, item_id, item["price_points"]),
-        )
-        conn.commit()
-        remaining = conn.execute(
-            "SELECT points FROM employees WHERE discord_id = ?", (discord_id,)
-        ).fetchone()["points"]
-    finally:
-        conn.close()
-
-    await send_admin_webhook(
-        "🛒 **Store redemption**",
-        {
-            "title": f"{employee['nickname']} redeemed {item['title']}",
-            "description": (
-                f"**Operative:** <@{discord_id}> ({employee['position']})\n"
-                f"**Item:** {item['title']}\n"
-                f"**Cost:** {item['price_points']} pts\n"
-                f"**Remaining balance:** {remaining} pts"
-            ),
-            "color": 0x34D399,
-        },
-    )
-    return web.json_response({"ok": True, "points": remaining, "item": dict(item)})
-
-
-@require_employee
-async def api_my_transactions(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT t.id, t.points_spent, t.created_at, s.title
-           FROM transactions t LEFT JOIN store_items s ON s.id = t.item_id
-           WHERE t.discord_id = ? ORDER BY t.created_at DESC LIMIT 50""",
-        (request["user"]["discord_id"],),
-    ).fetchall()
-    conn.close()
-    return web.json_response([dict(row) for row in rows])
-
-
-@require_employee
-async def api_update_profile(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    fields = {key: body[key] for key in ("nickname", "position", "bio", "contact_email")
-              if key in body and body[key] is not None}
-    if not fields:
-        return web.json_response({"error": "nothing_to_update"}, status=400)
-
-    assignments = ", ".join(f"{key} = ?" for key in fields)
-    conn = get_conn()
-    conn.execute(f"UPDATE employees SET {assignments} WHERE discord_id = ?",
-                 (*fields.values(), request["user"]["discord_id"]))
-    conn.commit()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?",
-                       (request["user"]["discord_id"],)).fetchone()
-    conn.close()
-    return web.json_response(employee_public(row))
-
-
-# --------------------------------------------------------------------------------------
-# ADMIN REST API
-# --------------------------------------------------------------------------------------
-
-@require_admin
-async def admin_upsert_employee(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    discord_id = str(body.get("discord_id", "")).strip()
-    nickname = (body.get("nickname") or "").strip()
-    position = (body.get("position") or "").strip()
+        await bot.db.execute("UPDATE schedules SET is_done = 1 WHERE id = ?", (db_id,))
     
-    if not discord_id or not nickname or not position:
-        return web.json_response({"error": "discord_id_nickname_position_required"}, status=400)
-
-    conn = get_conn()
-    conn.execute(
-        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(discord_id) DO UPDATE SET
-               emp_id = excluded.emp_id,
-               nickname = excluded.nickname,
-               position = excluded.position,
-               mbti = excluded.mbti,
-               bio = excluded.bio,
-               contact_email = excluded.contact_email,
-               points = excluded.points,
-               is_admin = excluded.is_admin""",
-        (
-            discord_id, 
-            body.get("emp_id"), 
-            nickname, 
-            position, 
-            body.get("mbti"), 
-            body.get("bio"), 
-            body.get("contact_email"),
-            int(body.get("points") or 0), 
-            int(bool(body.get("is_admin")))
-        ),
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
-    conn.close()
-    return web.json_response(employee_public(row))
-
-
-@require_admin
-async def admin_delete_employee(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    conn.execute("DELETE FROM employees WHERE id = ?", (int(request.match_info["emp_id"]),))
-    conn.commit()
-    conn.close()
-    return web.json_response({"ok": True})
-
-
-@require_admin
-async def admin_adjust_points(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    discord_id = str(body.get("discord_id", "")).strip()
-    try:
-        delta = int(body.get("delta"))
-    except (TypeError, ValueError):
-        return web.json_response({"error": "delta_required"}, status=400)
-
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
-    if not row:
-        conn.close()
-        return web.json_response({"error": "employee_not_found"}, status=404)
-    conn.execute("UPDATE employees SET points = MAX(0, points + ?) WHERE discord_id = ?",
-                 (delta, discord_id))
-    conn.commit()
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
-    conn.close()
-    return web.json_response(employee_public(row))
-
-
-@require_admin
-async def admin_upsert_game(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    title = (body.get("title") or "").strip()
-    status = (body.get("status") or "").strip().upper()
-    if not title or status not in ("IN DEVELOPMENT", "RELEASED", "PROTOTYPE"):
-        return web.json_response({"error": "title_and_valid_status_required"}, status=400)
-
-    conn = get_conn()
-    if body.get("id"):
-        conn.execute(
-            """UPDATE games SET title = ?, description = ?, status = ?, platforms = ?, image_url = ?
-               WHERE id = ?""",
-            (title, body.get("description"), status, body.get("platforms"),
-             body.get("image_url"), int(body["id"])),
-        )
-        game_id = int(body["id"])
-    else:
-        cursor = conn.execute(
-            """INSERT INTO games (title, description, status, platforms, image_url)
-               VALUES (?, ?, ?, ?, ?)""",
-            (title, body.get("description"), status, body.get("platforms"), body.get("image_url")),
-        )
-        game_id = cursor.lastrowid
-    conn.commit()
-    row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
-    conn.close()
-    return web.json_response(dict(row))
-
-
-@require_admin
-async def admin_delete_game(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    conn.execute("DELETE FROM games WHERE id = ?", (int(request.match_info["game_id"]),))
-    conn.commit()
-    conn.close()
-    return web.json_response({"ok": True})
-
-
-@require_admin
-async def admin_list_store_items(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM store_items ORDER BY id DESC").fetchall()
-    conn.close()
-    return web.json_response([dict(row) for row in rows])
-
-
-@require_admin
-async def admin_upsert_store_item(request: web.Request) -> web.StreamResponse:
-    body = await read_json(request)
-    title = (body.get("title") or "").strip()
-    try:
-        price = int(body.get("price_points"))
-    except (TypeError, ValueError):
-        return web.json_response({"error": "price_points_required"}, status=400)
-    if not title or price < 0:
-        return web.json_response({"error": "title_and_price_required"}, status=400)
-
-    stock = int(body.get("stock", -1))
-    is_active = int(bool(body.get("is_active", True)))
-    conn = get_conn()
-    if body.get("id"):
-        conn.execute(
-            """UPDATE store_items
-               SET title = ?, description = ?, price_points = ?, stock = ?, image_url = ?, is_active = ?
-               WHERE id = ?""",
-            (title, body.get("description"), price, stock, body.get("image_url"),
-             is_active, int(body["id"])),
-        )
-        item_id = int(body["id"])
-    else:
-        cursor = conn.execute(
-            """INSERT INTO store_items (title, description, price_points, stock, image_url, is_active)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (title, body.get("description"), price, stock, body.get("image_url"), is_active),
-        )
-        item_id = cursor.lastrowid
-    conn.commit()
-    row = conn.execute("SELECT * FROM store_items WHERE id = ?", (item_id,)).fetchone()
-    conn.close()
-    return web.json_response(dict(row))
-
-
-@require_admin
-async def admin_delete_store_item(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    conn.execute("DELETE FROM store_items WHERE id = ?", (int(request.match_info["item_id"]),))
-    conn.commit()
-    conn.close()
-    return web.json_response({"ok": True})
-
-
-@require_admin
-async def admin_transactions(request: web.Request) -> web.StreamResponse:
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT t.id, t.discord_id, t.points_spent, t.created_at,
-                  s.title AS item_title, e.nickname
-           FROM transactions t
-           LEFT JOIN store_items s ON s.id = t.item_id
-           LEFT JOIN employees e ON e.discord_id = t.discord_id
-           ORDER BY t.created_at DESC LIMIT 100"""
-    ).fetchall()
-    conn.close()
-    return web.json_response([dict(row) for row in rows])
-
-
-# --------------------------------------------------------------------------------------
-# WEB APP SETUP
-# --------------------------------------------------------------------------------------
-
-async def index(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "index.html")
-
-
-async def healthcheck(request: web.Request) -> web.StreamResponse:
-    return web.json_response({"status": "online", "bot": bool(bot.user and bot.is_ready())})
-
-
-# 1. เขียน Handlers (ห้องเป้าหมาย)
-async def page_index(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "pages" / "index.html")
-
-async def page_operatives(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "pages" / "operatives.html")
-
-async def page_archives(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "pages" / "archives.html")
-
-@require_employee
-async def page_store(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "pages" / "store.html")
-
-@require_admin
-async def page_admin(request: web.Request) -> web.StreamResponse:
-    return web.FileResponse(BASE_DIR / "pages" / "admin.html")
-
-
-# 2. นำมาผูก URL ใน build_app() (ป้ายบอกทาง)
-def build_app() -> web.Application:
-    app = web.Application()
-    app.add_routes([
-        # --- หน้าเว็บ MPA Pages ---
-        web.get("/", page_index),                    # พิมพ์ / ให้วิ่งไป page_index
-        web.get("/operatives", page_operatives),    # พิมพ์ /operatives ให้วิ่งไป page_operatives
-        web.get("/archives", page_archives),        # พิมพ์ /archives ให้วิ่งไป page_archives
-        web.get("/store", page_store),              # พิมพ์ /store ให้วิ่งไป page_store
-        web.get("/admin", page_admin),              # พิมพ์ /admin ให้วิ่งไป page_admin
-
-        # --- ระบบ Auth & REST APIs เดิมของคุณ ---
-        web.get("/healthz", healthcheck),
-        web.get("/auth/login", auth_login),
-        web.get("/auth/callback", auth_callback),
-        web.post("/auth/logout", auth_logout),
-        web.get("/api/me", api_me),
-        
-        web.get("/api/employees", api_employees),
-        web.get("/api/games", api_games),
-        web.get("/api/store/items", api_store_items),
-        web.post("/api/store/redeem", api_store_redeem),
-        web.get("/api/me/transactions", api_my_transactions),
-        web.patch("/api/me/profile", api_update_profile),
-
-        web.post("/api/admin/employees", admin_upsert_employee),
-        web.delete("/api/admin/employees/{emp_id}", admin_delete_employee),
-        web.post("/api/admin/points", admin_adjust_points),
-        web.post("/api/admin/games", admin_upsert_game),
-        web.delete("/api/admin/games/{game_id}", admin_delete_game),
-        web.get("/api/admin/store/items", admin_list_store_items),
-        web.post("/api/admin/store/items", admin_upsert_store_item),
-        web.delete("/api/admin/store/items/{item_id}", admin_delete_store_item),
-        web.get("/api/admin/transactions", admin_transactions),
-    ])
-
-    assets_dir = BASE_DIR / "assets"
-    if assets_dir.exists():
-        app.router.add_static("/assets/", assets_dir)
-        
-    return app
-
-
-async def start_web_server() -> web.AppRunner:
-    runner = web.AppRunner(build_app())
-    await runner.setup()
-    site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
-    await site.start()
-    print(f"[Web] Societ portal listening on http://{WEB_HOST}:{WEB_PORT}")
-    return runner
-
+    if meetings:
+        await bot.db.commit()
 
 # --------------------------------------------------------------------------------------
 # DISCORD COMMANDS & BOT SETUP
@@ -1173,22 +541,29 @@ async def meeting_delete(interaction: discord.Interaction, db_id: int):
 # EMPLOYEE MANAGEMENT COMMANDS
 # --------------------------------------------------------------------------------------
 
-@bot.tree.command(name="add_employee", description="🗂️ Add or update an operative record (Admin only)")
+@bot.tree.command(
+    name="add_employee",
+    description="🗂️ Add or update an operative record (Admin only)",
+)
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
 async def add_employee(
-    interaction: discord.Interaction, 
-    member: discord.Member, 
+    interaction: discord.Interaction,
+    member: discord.Member,
     emp_id: str,
     nickname: str,
-    position: str, 
+    position: str,
     mbti: str = "N/A",
     bio: Optional[str] = None,
-    gmail: Optional[str] = None, 
+    gmail: Optional[str] = None,
     points: int = 0,
-    is_admin: bool = False
+    is_admin: bool = False,
 ) -> None:
     conn = get_conn()
+
+    # ตั้งค่าเพื่อให้ดึงข้อมูลผ่านชื่อ Column เช่น row['emp_id'] ได้ไม่ให้อีก
+    conn.row_factory = sqlite3.Row
+
     conn.execute(
         """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1201,29 +576,53 @@ async def add_employee(
                contact_email = COALESCE(excluded.contact_email, employees.contact_email),
                points = excluded.points,
                is_admin = excluded.is_admin""",
-        (str(member.id), emp_id, nickname, position, mbti, bio, gmail, points, int(is_admin)),
+        (
+            str(member.id),
+            emp_id,
+            nickname,
+            position,
+            mbti,
+            bio,
+            gmail,
+            points,
+            int(is_admin),
+        ),
     )
     conn.commit()
-    
-    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)).fetchone()
+
+    row = conn.execute(
+        "SELECT * FROM employees WHERE discord_id = ?", (str(member.id),)
+    ).fetchone()
     conn.close()
 
     embed = discord.Embed(
-        title="✨ Operative Profile Saved", 
+        title="✨ Operative Profile Saved",
         description=f"Successfully updated employee record for {member.mention}",
-        color=0x34D399
+        color=0x34D399,
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True)
-    embed.add_field(name="🏷️ Nickname", value=row['nickname'], inline=True)
-    embed.add_field(name="💼 Position", value=row['position'], inline=True)
-    embed.add_field(name="🧩 MBTI", value=row['mbti'], inline=True)
-    embed.add_field(name="✉️ Gmail", value=row['contact_email'] or "N/A", inline=True)
-    embed.add_field(name="💰 Points", value=f"**{row['points']}** pts", inline=True)
-    embed.add_field(name="🛠️ Portal Admin", value="✅ Yes" if row['is_admin'] else "❌ No", inline=False)
-    
-    if row['bio']:
-        embed.add_field(name="📝 Biography", value=f"> {row['bio']}", inline=False)
+    embed.add_field(
+        name="📋 Employee ID", value=f"`{row['emp_id']}`", inline=True
+    )
+    embed.add_field(name="🏷️ Nickname", value=row["nickname"], inline=True)
+    embed.add_field(name="💼 Position", value=row["position"], inline=True)
+    embed.add_field(name="🧩 MBTI", value=row["mbti"], inline=True)
+    embed.add_field(
+        name="✉️ Gmail", value=row["contact_email"] or "N/A", inline=True
+    )
+    embed.add_field(
+        name="💰 Points", value=f"**{row['points']}** pts", inline=True
+    )
+    embed.add_field(
+        name="🛠️ Portal Admin",
+        value="✅ Yes" if row["is_admin"] else "❌ No",
+        inline=False,
+    )
+
+    if row["bio"]:
+        embed.add_field(
+            name="📝 Biography", value=f"> {row['bio']}", inline=False
+        )
 
     await interaction.response.send_message(embed=embed)
 
@@ -1315,8 +714,8 @@ async def delete_employee(interaction: discord.Interaction, member: discord.Memb
 )
 async def rd_employee(
     interaction: discord.Interaction, 
-    position: typing.Optional[str] = None,
-    channel: typing.Optional[discord.TextChannel] = None
+    position: Optional[str] = None,
+    channel: Optional[discord.TextChannel] = None
 ):
     conn = get_conn()
     
@@ -1458,19 +857,853 @@ async def points_give(interaction: discord.Interaction, member: discord.Member, 
     embed.add_field(name="💳 แต้มรวมใหม่", value=f"**{new_points}** pts", inline=True)
     await interaction.response.send_message(embed=embed)
 
+# --------------------------------------------------------------------------------------
+# SESSION HANDLING & WEB HELPERS
+# --------------------------------------------------------------------------------------
+
+def _b64e(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+def _b64d(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+def sign_session(payload: dict) -> str:
+    body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
+    signature = hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+    return f"{body}.{_b64e(signature)}"
+
+def read_session(token: Optional[str]) -> Optional[dict]:
+    if not token or "." not in token:
+        return None
+    body, signature = token.rsplit(".", 1)
+    expected = hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+    try:
+        if not hmac.compare_digest(expected, _b64d(signature)):
+            return None
+        payload = json.loads(_b64d(body))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if payload.get("exp", 0) < time.time():
+        return None
+    return payload
+
+async def fetch_employee(app: web.Application, discord_id: str) -> Optional[aiosqlite.Row]:
+    db = app['bot'].db
+    async with db.execute("SELECT * FROM employees WHERE discord_id = ?", (str(discord_id),)) as cursor:
+        return await cursor.fetchone()
+
+def employee_public(row: aiosqlite.Row) -> dict:
+    return {
+        "id": row["id"],
+        "discord_id": row["discord_id"],
+        "nickname": row["nickname"],
+        "position": row["position"],
+        "bio": row["bio"],
+        "contact_email": row["contact_email"],
+        "points": row["points"],
+        "is_admin": bool(row["is_admin"]),
+    }
+
+async def current_user(request: web.Request) -> Optional[dict]:
+    payload = read_session(request.cookies.get(SESSION_COOKIE))
+    if not payload:
+        return None
+    row = await fetch_employee(request.app, payload["discord_id"])
+    if not row:
+        return {
+            "discord_id": payload["discord_id"],
+            "username": payload.get("username"),
+            "avatar_url": payload.get("avatar_url"),
+            "role": "guest",
+            "employee": None,
+        }
+    return {
+        "discord_id": row["discord_id"],
+        "username": payload.get("username"),
+        "avatar_url": payload.get("avatar_url"),
+        "role": "admin" if row["is_admin"] else "employee",
+        "employee": employee_public(row),
+    }
+
+Handler = Callable[[web.Request], Coroutine[Any, Any, web.StreamResponse]]
+
+def require_employee(handler: Handler) -> Handler:
+    async def wrapper(request: web.Request) -> web.StreamResponse:
+        user = await current_user(request)
+        if not user or user["role"] == "guest":
+            raise web.HTTPUnauthorized(text=json.dumps({"error": "employee_login_required"}), content_type="application/json")
+        request["user"] = user
+        return await handler(request)
+    return wrapper
+
+def require_admin(handler: Handler) -> Handler:
+    async def wrapper(request: web.Request) -> web.StreamResponse:
+        user = await current_user(request)
+        if not user or user["role"] != "admin":
+            raise web.HTTPForbidden(text=json.dumps({"error": "admin_only"}), content_type="application/json")
+        request["user"] = user
+        return await handler(request)
+    return wrapper
+
+async def read_json(request: web.Request) -> dict:
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "invalid_json"}), content_type="application/json")
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "invalid_json"}), content_type="application/json")
+    return data
 
 # --------------------------------------------------------------------------------------
-# MAIN ENTRYPOINT
+# DISCORD OAUTH2 & WEB API
 # --------------------------------------------------------------------------------------
 
-async def main():
-    init_db()
-    runner = await start_web_server()
+async def auth_login(request: web.Request) -> web.StreamResponse:
+    if not CLIENT_ID or not CLIENT_SECRET:
+        return web.json_response({"error": "oauth_not_configured"}, status=503)
+    state = secrets.token_urlsafe(24)
+    params = {
+        "client_id": CLIENT_ID,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "identify",
+        "state": state,
+        "prompt": "consent",
+    }
+    response = web.HTTPFound(f"{DISCORD_API}/oauth2/authorize?{urlencode(params)}")
+    response.set_cookie("societ_oauth_state", state, max_age=600, httponly=True, samesite="Lax", secure=SESSION_SECURE)
+    raise response
+
+async def auth_callback(request: web.Request) -> web.StreamResponse:
+    code = request.query.get("code")
+    state = request.query.get("state")
+    cookie_state = request.cookies.get("societ_oauth_state")
+
+    if not code:
+        return web.json_response({"error": "missing_code"}, status=400)
+    if cookie_state and state != cookie_state:
+        return web.json_response({"error": "invalid_oauth_state"}, status=400)
+
+    data = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{DISCORD_API}/oauth2/token", data=data) as resp:
+            if resp.status != 200:
+                return web.json_response({"error": "token_exchange_failed"}, status=502)
+            token_data = await resp.json()
+        headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+        async with session.get(f"{DISCORD_API}/users/@me", headers=headers) as resp:
+            if resp.status != 200:
+                return web.json_response({"error": "profile_fetch_failed"}, status=502)
+            profile = await resp.json()
+
+    avatar = profile.get("avatar")
+    avatar_url = f"https://cdn.discordapp.com/avatars/{profile['id']}/{avatar}.png" if avatar else f"https://cdn.discordapp.com/embed/avatars/{(int(profile['id']) >> 22) % 6}.png"
     
+    payload = {
+        "discord_id": str(profile["id"]),
+        "username": profile.get("global_name") or profile.get("username"),
+        "avatar_url": avatar_url,
+        "exp": int(time.time()) + SESSION_TTL,
+    }
+    response = web.HTTPFound("/")
+    response.set_cookie(SESSION_COOKIE, sign_session(payload), max_age=SESSION_TTL, path="/", httponly=True, samesite="Lax", secure=SESSION_SECURE)
+    if "societ_oauth_state" in request.cookies:
+        response.del_cookie("societ_oauth_state", path="/")
+    raise response
+
+async def auth_logout(request: web.Request) -> web.StreamResponse:
+    response = web.json_response({"ok": True})
+    response.del_cookie(SESSION_COOKIE)
+    return response
+
+async def api_me(request: web.Request) -> web.StreamResponse:
+    user = await current_user(request)
+    if not user:
+        return web.json_response({"authenticated": False, "role": "guest"})
+    return web.json_response({"authenticated": True, **user})
+
+# --------------------------------------------------------------------------------------
+
+# REST API (EMPLOYEE & PUBLIC)
+
+# --------------------------------------------------------------------------------------
+
+
+
+async def api_employees(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute("SELECT * FROM employees ORDER BY is_admin DESC, nickname ASC").fetchall()
+
+    conn.close()
+
+    return web.json_response([employee_public(row) for row in rows])
+
+
+
+
+
+async def api_games(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute("SELECT * FROM games ORDER BY created_at DESC, id DESC").fetchall()
+
+    conn.close()
+
+    return web.json_response([dict(row) for row in rows])
+
+
+
+
+
+@require_employee
+
+async def api_store_items(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute(
+
+        "SELECT * FROM store_items WHERE is_active = 1 ORDER BY price_points ASC"
+
+    ).fetchall()
+
+    conn.close()
+
+    return web.json_response([dict(row) for row in rows])
+
+
+
+
+
+async def send_admin_webhook(content: str, embed: Optional[dict] = None) -> None:
+
+    if not ADMIN_WEBHOOK_URL:
+
+        return
+
+    payload: dict = {"content": content}
+
+    if embed:
+
+        payload["embeds"] = [embed]
+
+    try:
+
+        async with aiohttp.ClientSession() as session:
+
+            await session.post(ADMIN_WEBHOOK_URL, json=payload)
+
+    except aiohttp.ClientError as exc:
+
+        print(f"[Webhook] failed to notify admins: {exc}")
+
+
+
+
+
+@require_employee
+
+async def api_store_redeem(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    try:
+
+        item_id = int(body.get("item_id"))
+
+    except (TypeError, ValueError):
+
+        return web.json_response({"error": "item_id_required"}, status=400)
+
+
+
+    discord_id = request["user"]["discord_id"]
+
+    conn = get_conn()
+
+    try:
+
+        conn.execute("BEGIN IMMEDIATE")
+
+        item = conn.execute(
+
+            "SELECT * FROM store_items WHERE id = ? AND is_active = 1", (item_id,)
+
+        ).fetchone()
+
+        if not item:
+
+            conn.rollback()
+
+            return web.json_response({"error": "item_not_found"}, status=404)
+
+        if item["stock"] == 0:
+
+            conn.rollback()
+
+            return web.json_response({"error": "out_of_stock"}, status=409)
+
+
+
+        employee = conn.execute(
+
+            "SELECT * FROM employees WHERE discord_id = ?", (discord_id,)
+
+        ).fetchone()
+
+        if employee["points"] < item["price_points"]:
+
+            conn.rollback()
+
+            return web.json_response({"error": "insufficient_points",
+
+                                      "points": employee["points"],
+
+                                      "required": item["price_points"]}, status=402)
+
+
+
+        conn.execute("UPDATE employees SET points = points - ? WHERE discord_id = ?",
+
+                     (item["price_points"], discord_id))
+
+        if item["stock"] > 0:
+
+            conn.execute("UPDATE store_items SET stock = stock - 1 WHERE id = ?", (item_id,))
+
+        conn.execute(
+
+            "INSERT INTO transactions (discord_id, item_id, points_spent) VALUES (?, ?, ?)",
+
+            (discord_id, item_id, item["price_points"]),
+
+        )
+
+        conn.commit()
+
+        remaining = conn.execute(
+
+            "SELECT points FROM employees WHERE discord_id = ?", (discord_id,)
+
+        ).fetchone()["points"]
+
+    finally:
+
+        conn.close()
+
+
+
+    await send_admin_webhook(
+
+        "🛒 **Store redemption**",
+
+        {
+
+            "title": f"{employee['nickname']} redeemed {item['title']}",
+
+            "description": (
+
+                f"**Operative:** <@{discord_id}> ({employee['position']})\n"
+
+                f"**Item:** {item['title']}\n"
+
+                f"**Cost:** {item['price_points']} pts\n"
+
+                f"**Remaining balance:** {remaining} pts"
+
+            ),
+
+            "color": 0x34D399,
+
+        },
+
+    )
+
+    return web.json_response({"ok": True, "points": remaining, "item": dict(item)})
+
+
+
+
+
+@require_employee
+
+async def api_my_transactions(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute(
+
+        """SELECT t.id, t.points_spent, t.created_at, s.title
+
+           FROM transactions t LEFT JOIN store_items s ON s.id = t.item_id
+
+           WHERE t.discord_id = ? ORDER BY t.created_at DESC LIMIT 50""",
+
+        (request["user"]["discord_id"],),
+
+    ).fetchall()
+
+    conn.close()
+
+    return web.json_response([dict(row) for row in rows])
+
+
+
+
+
+@require_employee
+
+async def api_update_profile(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    fields = {key: body[key] for key in ("nickname", "position", "bio", "contact_email")
+
+              if key in body and body[key] is not None}
+
+    if not fields:
+
+        return web.json_response({"error": "nothing_to_update"}, status=400)
+
+
+
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+
+    conn = get_conn()
+
+    conn.execute(f"UPDATE employees SET {assignments} WHERE discord_id = ?",
+
+                 (*fields.values(), request["user"]["discord_id"]))
+
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?",
+
+                       (request["user"]["discord_id"],)).fetchone()
+
+    conn.close()
+
+    return web.json_response(employee_public(row))
+
+
+
+
+
+# --------------------------------------------------------------------------------------
+
+# ADMIN REST API
+
+# --------------------------------------------------------------------------------------
+
+
+
+@require_admin
+
+async def admin_upsert_employee(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    discord_id = str(body.get("discord_id", "")).strip()
+
+    nickname = (body.get("nickname") or "").strip()
+
+    position = (body.get("position") or "").strip()
+
+    
+
+    if not discord_id or not nickname or not position:
+
+        return web.json_response({"error": "discord_id_nickname_position_required"}, status=400)
+
+
+
+    conn = get_conn()
+
+    conn.execute(
+
+        """INSERT INTO employees (discord_id, emp_id, nickname, position, mbti, bio, contact_email, points, is_admin)
+
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+           ON CONFLICT(discord_id) DO UPDATE SET
+
+               emp_id = excluded.emp_id,
+
+               nickname = excluded.nickname,
+
+               position = excluded.position,
+
+               mbti = excluded.mbti,
+
+               bio = excluded.bio,
+
+               contact_email = excluded.contact_email,
+
+               points = excluded.points,
+
+               is_admin = excluded.is_admin""",
+
+        (
+
+            discord_id, 
+
+            body.get("emp_id"), 
+
+            nickname, 
+
+            position, 
+
+            body.get("mbti"), 
+
+            body.get("bio"), 
+
+            body.get("contact_email"),
+
+            int(body.get("points") or 0), 
+
+            int(bool(body.get("is_admin")))
+
+        ),
+
+    )
+
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
+
+    conn.close()
+
+    return web.json_response(employee_public(row))
+
+
+
+
+
+@require_admin
+
+async def admin_delete_employee(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    conn.execute("DELETE FROM employees WHERE id = ?", (int(request.match_info["emp_id"]),))
+
+    conn.commit()
+
+    conn.close()
+
+    return web.json_response({"ok": True})
+
+
+
+
+
+@require_admin
+
+async def admin_adjust_points(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    discord_id = str(body.get("discord_id", "")).strip()
+
+    try:
+
+        delta = int(body.get("delta"))
+
+    except (TypeError, ValueError):
+
+        return web.json_response({"error": "delta_required"}, status=400)
+
+
+
+    conn = get_conn()
+
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
+
+    if not row:
+
+        conn.close()
+
+        return web.json_response({"error": "employee_not_found"}, status=404)
+
+    conn.execute("UPDATE employees SET points = MAX(0, points + ?) WHERE discord_id = ?",
+
+                 (delta, discord_id))
+
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM employees WHERE discord_id = ?", (discord_id,)).fetchone()
+
+    conn.close()
+
+    return web.json_response(employee_public(row))
+
+
+
+
+
+@require_admin
+
+async def admin_upsert_game(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    title = (body.get("title") or "").strip()
+
+    status = (body.get("status") or "").strip().upper()
+
+    if not title or status not in ("IN DEVELOPMENT", "RELEASED", "PROTOTYPE"):
+
+        return web.json_response({"error": "title_and_valid_status_required"}, status=400)
+
+
+
+    conn = get_conn()
+
+    if body.get("id"):
+
+        conn.execute(
+
+            """UPDATE games SET title = ?, description = ?, status = ?, platforms = ?, image_url = ?
+
+               WHERE id = ?""",
+
+            (title, body.get("description"), status, body.get("platforms"),
+
+             body.get("image_url"), int(body["id"])),
+
+        )
+
+        game_id = int(body["id"])
+
+    else:
+
+        cursor = conn.execute(
+
+            """INSERT INTO games (title, description, status, platforms, image_url)
+
+               VALUES (?, ?, ?, ?, ?)""",
+
+            (title, body.get("description"), status, body.get("platforms"), body.get("image_url")),
+
+        )
+
+        game_id = cursor.lastrowid
+
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+
+    conn.close()
+
+    return web.json_response(dict(row))
+
+
+
+
+
+@require_admin
+
+async def admin_delete_game(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    conn.execute("DELETE FROM games WHERE id = ?", (int(request.match_info["game_id"]),))
+
+    conn.commit()
+
+    conn.close()
+
+    return web.json_response({"ok": True})
+
+
+
+
+
+@require_admin
+
+async def admin_list_store_items(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute("SELECT * FROM store_items ORDER BY id DESC").fetchall()
+
+    conn.close()
+
+    return web.json_response([dict(row) for row in rows])
+
+
+
+
+
+@require_admin
+
+async def admin_upsert_store_item(request: web.Request) -> web.StreamResponse:
+
+    body = await read_json(request)
+
+    title = (body.get("title") or "").strip()
+
+    try:
+
+        price = int(body.get("price_points"))
+
+    except (TypeError, ValueError):
+
+        return web.json_response({"error": "price_points_required"}, status=400)
+
+    if not title or price < 0:
+
+        return web.json_response({"error": "title_and_price_required"}, status=400)
+
+
+
+    stock = int(body.get("stock", -1))
+
+    is_active = int(bool(body.get("is_active", True)))
+
+    conn = get_conn()
+
+    if body.get("id"):
+
+        conn.execute(
+
+            """UPDATE store_items
+
+               SET title = ?, description = ?, price_points = ?, stock = ?, image_url = ?, is_active = ?
+
+               WHERE id = ?""",
+
+            (title, body.get("description"), price, stock, body.get("image_url"),
+
+             is_active, int(body["id"])),
+
+        )
+
+        item_id = int(body["id"])
+
+    else:
+
+        cursor = conn.execute(
+
+            """INSERT INTO store_items (title, description, price_points, stock, image_url, is_active)
+
+               VALUES (?, ?, ?, ?, ?, ?)""",
+
+            (title, body.get("description"), price, stock, body.get("image_url"), is_active),
+
+        )
+
+        item_id = cursor.lastrowid
+
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM store_items WHERE id = ?", (item_id,)).fetchone()
+
+    conn.close()
+
+    return web.json_response(dict(row))
+
+
+
+
+
+@require_admin
+
+async def admin_delete_store_item(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    conn.execute("DELETE FROM store_items WHERE id = ?", (int(request.match_info["item_id"]),))
+
+    conn.commit()
+
+    conn.close()
+
+    return web.json_response({"ok": True})
+
+
+
+
+
+@require_admin
+
+async def admin_transactions(request: web.Request) -> web.StreamResponse:
+
+    conn = get_conn()
+
+    rows = conn.execute(
+
+        """SELECT t.id, t.discord_id, t.points_spent, t.created_at,
+
+                  s.title AS item_title, e.nickname
+
+           FROM transactions t
+
+           LEFT JOIN store_items s ON s.id = t.item_id
+
+           LEFT JOIN employees e ON e.discord_id = t.discord_id
+
+           ORDER BY t.created_at DESC LIMIT 100"""
+
+    ).fetchall()
+
+    conn.close()
+
+    return web.json_response([dict(row) for row in rows])
+
+# --------------------------------------------------------------------------------------
+# WEB APP SETUP
+# --------------------------------------------------------------------------------------
+def build_app(bot_instance) -> web.Application:
+    app = web.Application()
+    app['bot'] = bot_instance  # เก็บ Instance ของบอทไว้ใน App เพื่อให้ Web API เรียกใช้ DB ได้
+    app.add_routes([
+        web.get("/", page_index),
+        web.get("/operatives", page_operatives),
+        web.get("/archives", page_archives),
+        web.get("/store", page_store),
+        web.get("/admin", page_admin),
+
+        web.get("/auth/login", auth_login),
+        web.get("/auth/callback", auth_callback),
+        web.post("/auth/logout", auth_logout),
+        web.get("/api/me", api_me),
+        
+        web.get("/api/employees", api_employees),
+        web.get("/api/games", api_games),
+        web.get("/api/store/items", api_store_items),
+        web.post("/api/store/redeem", api_store_redeem),
+        web.get("/api/me/transactions", api_my_transactions),
+    ])
+
+    assets_dir = BASE_DIR / "assets"
+    if assets_dir.exists():
+        app.router.add_static("/assets/", assets_dir)
+        
+    return app
+
+
+# ================= Entry Point =================
+async def main():
     try:
         if not TOKEN:
             print("[Warning] DISCORD_TOKEN is not configured in environment variables!")
             print("[System] Web Portal will keep running. Press Ctrl+C to terminate.")
+            app = build_app(bot)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
+            await site.start()
+            print(f"[Web] Societ portal listening on http://{WEB_HOST}:{WEB_PORT}")
             while True:
                 await asyncio.sleep(3600)
         else:
@@ -1479,9 +1712,6 @@ async def main():
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n[System] Shutting down gracefully...")
     finally:
-        print("[System] Cleaning up web server...")
-        await runner.cleanup()
-
         if TOKEN and not bot.is_closed():
             await bot.close()
 
