@@ -9,3 +9,4 @@ aiohttp_session
 cryptography
 python-dotenv==1.0.1
 aiosqlite==0.20.0
+hypercorn
