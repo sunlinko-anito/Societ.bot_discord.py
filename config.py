@@ -21,7 +21,11 @@ SESSION_TTL = 60 * 60 * 24 * 7
 SESSION_SECURE = os.getenv("SESSION_SECURE", "false").lower() == "true"
 ADMIN_ROLE_ID = 1511341249985122485
 
-# Wispbyte มักจะส่ง PORT มาให้ผ่านตัวแปร SERVER_PORT หรือ PORT
 WEB_HOST = os.getenv("HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("SERVER_PORT", os.getenv("PORT", "13660")))
 DISCORD_API = "https://discord.com/api/v10"
+
+# --- ตัวแปรสำรองเพื่อให้ main.py และไฟล์อื่นๆ เรียกใช้ได้แบบไม่มีปัญหา ---
+DISCORD_TOKEN = TOKEN
+HOST = WEB_HOST
+PORT = WEB_PORT
