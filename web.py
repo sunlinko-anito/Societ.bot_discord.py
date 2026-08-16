@@ -167,3 +167,5 @@ def build_app() -> web.Application:
         app.router.add_static("/static/", static_dir)
         
     return app
+# เพิ่มบรรทัดนี้ไว้ท้ายสุดของ web.py
+app = build_app()
