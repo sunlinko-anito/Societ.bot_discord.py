@@ -1,29 +1,41 @@
+รวบรวมโค้ดทั้งหมดเข้าด้วยกันให้แบบสมบูรณ์ 100% แล้วครับ โดยรวมทั้งสีพื้นหลังและดาวแฉกจากรูปภาพ ร่วมกับระบบปุ่มกดและ UI กระจกใสเดิมครบถ้วนในไฟล์เดียว นำไปวางทับใน `static/css/style.css` ได้เลยครับ
+
+```css
 /* =========================================
-   1. พื้นหลัง (Background)
+   1. พื้นหลัง (Background - ตรงตามภาพ 100%)
    ========================================= */
 body {
     margin: 0;
-    /* ไล่เฉดสีตามรูปภาพ: ม่วงเข้ม -> น้ำเงิน -> เขียวเข้ม */
-    background: linear-gradient(135deg, #30005a 0%, #0b1142 40%, #08301a 75%, #1b5e20 100%) !important;
-    background-attachment: fixed; /* ล็อกสีพื้นหลังไม่ให้ขยับตอนเลื่อนหน้าเว็บ */
+    background-color: #050714 !important;
+    background-image: 
+        /* แสงม่วงสดเรืองซ้ายบน */
+        radial-gradient(ellipse at 8% 8%, rgba(147, 51, 234, 0.65) 0%, rgba(88, 28, 135, 0.4) 30%, transparent 60%),
+        /* แสงเขียวสว่างเรืองขวาล่าง */
+        radial-gradient(ellipse at 92% 92%, rgba(34, 197, 94, 0.6) 0%, rgba(21, 128, 61, 0.4) 35%, transparent 65%),
+        /* จุดสว่างเขียวมรกตมุมล่างสุด */
+        radial-gradient(circle at 98% 98%, rgba(74, 222, 128, 0.5) 0%, transparent 30%),
+        /* ไล่เฉดสีหลักแนวทแยง (ม่วงเข้ม -> กรมท่า -> เขียวมืด) */
+        linear-gradient(135deg, #2d064e 0%, #140533 25%, #080d28 50%, #062e1d 78%, #021a11 100%) !important;
+    background-attachment: fixed;
     color: white;
     font-family: sans-serif;
+    overflow-x: hidden;
 }
 
 /* =========================================
-   2. ระบบดวงดาว (Stars & Sky)
+   2. ระบบดวงดาวและฉากหลัง (Stars, Sky & Particles)
    ========================================= */
 .night-sky {
-    position: fixed; /* ให้ดาวอยู่กับที่เวลาเลื่อนหน้าจอ */
+    position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    pointer-events: none; /* ป้องกันไม่ให้ดาวไปบังการกดปุ่ม */
+    pointer-events: none;
 }
 
-/* --- 2.1 ดาวกระพริบปกติ --- */
+/* 2.1 ดาวกระพริบปกติ */
 .star {
     position: absolute;
     background-color: white;
@@ -36,15 +48,25 @@ body {
     100% { opacity: 1; transform: scale(1.2); }
 }
 
-/* --- 2.2 ดาวตก --- */
-.shooting-star {
+/* 2.2 ฝุ่นดาว (Star Dust) */
+.dust-particle {
     position: absolute;
-    width: 4px;
-    height: 4px;
     background: white;
     border-radius: 50%;
-    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.1), 0 0 0 8px rgba(255, 255, 255, 0.1), 0 0 20px rgba(255, 255, 255, 1);
-    animation: shoot 2s linear forwards;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* 2.3 ดาวตกสว่างชัดเจน */
+.shooting-star {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    background: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 0 10px 2px #ffffff, 0 0 20px 5px rgba(76, 201, 240, 0.9);
+    animation: shoot 1.8s ease-out forwards;
+    opacity: 0;
 }
 
 .shooting-star::before {
@@ -52,47 +74,52 @@ body {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    width: 80px;
-    height: 1px;
-    background: linear-gradient(90deg, white, transparent);
+    width: 160px;
+    height: 2px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 1), rgba(76, 201, 240, 0.6), transparent);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
 }
 
 @keyframes shoot {
     0% { transform: translateX(0) translateY(0) rotate(-45deg); opacity: 1; }
-    100% { transform: translateX(-400px) translateY(400px) rotate(-45deg); opacity: 0; }
+    70% { opacity: 1; }
+    100% { transform: translateX(-900px) translateY(900px) rotate(-45deg); opacity: 0; }
 }
 
-/* --- 2.3 ดาวสว่างแบบมีแฉก 4 ทิศทาง (Cross-star) --- */
+/* 2.4 ดาวแฉกสว่าง 4 ทิศทาง (Cross Star) */
 .cross-star {
     position: absolute;
-    width: 2px;
-    height: 2px;
-    background: white;
-    box-shadow: 0 0 15px 3px rgba(255, 255, 255, 1); /* แสงฟุ้งตรงกลาง */
+    width: 3px;
+    height: 3px;
+    background: #ffffff;
+    box-shadow: 0 0 12px 4px rgba(255, 255, 255, 0.9);
     border-radius: 50%;
-    animation: twinkle 2s infinite alternate;
+    animation: pulseGlow 2.5s infinite alternate ease-in-out;
 }
 
-/* แฉกแนวตั้ง */
 .cross-star::before {
     content: '';
     position: absolute;
-    top: -15px; 
-    left: 0px; 
-    width: 2px; 
-    height: 32px;
-    background: linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.8) 50%, transparent 100%);
+    top: -18px; 
+    left: 1px; 
+    width: 1px; 
+    height: 39px;
+    background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.95) 50%, transparent);
 }
 
-/* แฉกแนวนอน */
 .cross-star::after {
     content: '';
     position: absolute;
-    top: 0px; 
-    left: -15px; 
-    width: 32px; 
-    height: 2px;
-    background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.8) 50%, transparent 100%);
+    top: 1px; 
+    left: -18px; 
+    width: 39px; 
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(255,255,255,0.95) 50%, transparent);
+}
+
+@keyframes pulseGlow {
+    0% { transform: scale(0.85); opacity: 0.7; }
+    100% { transform: scale(1.15); opacity: 1; }
 }
 
 /* =========================================
@@ -134,7 +161,7 @@ body {
 /* =========================================
    4. ตกแต่งเสริม (UI Elements)
    ========================================= */
-/* สไตล์กล่องกระจกใส (Glassmorphism) สำหรับครอบเนื้อหา */
+/* สไตล์กล่องกระจกใส (Glassmorphism) */
 .glass-panel {
     background: rgba(20, 25, 45, 0.6);
     backdrop-filter: blur(12px);
@@ -145,12 +172,12 @@ body {
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
 }
 
-/* สไตล์เรืองแสงสำหรับหัวข้อ */
+/* หัวข้อเรืองแสง */
 .title-glow {
     text-shadow: 0 0 10px rgba(76, 201, 240, 0.8), 0 0 20px rgba(123, 44, 191, 0.6);
 }
 
-/* สีปุ่มพิเศษ (เขียนทับสีหลักของ magic-btn) */
+/* สีปุ่มเฉพาะ */
 .btn-admin { 
     background: linear-gradient(45deg, #e63946, #ffb703) !important; 
     box-shadow: 0 0 20px rgba(230, 57, 70, 0.5) !important;
@@ -163,3 +190,5 @@ body {
     background: linear-gradient(45deg, #2a9d8f, #e9c46a) !important; 
     box-shadow: 0 0 20px rgba(42, 157, 143, 0.5) !important; 
 }
+
+```
