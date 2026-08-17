@@ -4,6 +4,7 @@ from aiohttp import web
 from config import DISCORD_TOKEN, HOST, PORT
 from bot import bot
 from web import app
+from database import init_db  # 1. นำเข้าฟังก์ชัน init_db เข้ามาใช้งาน
 
 async def start_web():
     runner = web.AppRunner(app)
@@ -17,6 +18,9 @@ async def start_bot():
     await bot.start(DISCORD_TOKEN)
 
 async def main():
+    # 2. เรียกใช้งานฟังก์ชัน init_db() ก่อนที่จะเริ่มการทำงานของระบบอื่นๆ
+    await init_db() 
+    
     await asyncio.gather(
         start_bot(),
         start_web()
