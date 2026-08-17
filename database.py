@@ -1,14 +1,20 @@
 import aiosqlite
 import config
+from contextlib import asynccontextmanager
 
-async def get_db() -> aiosqlite.Connection:
-    """สร้าง Connection แบบ Async และเปิดใช้งาน WAL Mode เพื่อแก้ปัญหาคอขวด"""
-    conn = await aiosqlite.connect(config.DB_NAME)
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA journal_mode=WAL;")  # อนุญาตให้อ่านและเขียนพร้อมกันได้
-    await conn.execute("PRAGMA synchronous=NORMAL;")
-    await conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+@asynccontextmanager
+async def _db_connection():
+    """จัดการการเชื่อมต่อฐานข้อมูลให้รองรับ async with โดยไม่ให้ thread ชนกัน"""
+    async with aiosqlite.connect(config.DB_NAME) as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL;")
+        await conn.execute("PRAGMA synchronous=NORMAL;")
+        await conn.execute("PRAGMA foreign_keys = ON;")
+        yield conn
+
+async def get_db():
+    """ฟังก์ชันคืนค่า Context Manager เพื่อให้ bot.py ใช้งานคำสั่งเดิมได้ทันที"""
+    return _db_connection()
 
 async def init_db():
     """สร้างตารางในฐานข้อมูล (ทำงานครั้งเดียวตอนเปิดระบบ)"""
@@ -88,3 +94,4 @@ async def init_db():
         """)
         await db.commit()
         print(f"[Database] Tables ready in {config.DB_NAME} (WAL Mode Enabled)")
+        
