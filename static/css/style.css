@@ -1,4 +1,90 @@
-/* เพิ่มการตกแต่งในอนาคตได้ที่นี่ */
+
+/* ตั้งค่าพื้นหลัง */
 body {
-    font-family: Arial, sans-serif;
+    margin: 0;
+    background-color: #0b0f19 !important; 
+    color: white;
+    font-family: sans-serif;
+}
+
+/* --- ท้องฟ้า ดาวกระพริบ และ ดาวตก --- */
+.night-sky {
+    position: fixed; /* ให้ดาวอยู่กับที่เวลาเลื่อนหน้าจอ */
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    pointer-events: none; /* ป้องกันไม่ให้ดาวไปบังการกดปุ่ม */
+}
+
+.star {
+    position: absolute;
+    background-color: white;
+    border-radius: 50%;
+    animation: twinkle infinite alternate;
+}
+
+@keyframes twinkle {
+    0% { opacity: 0.2; transform: scale(0.8); }
+    100% { opacity: 1; transform: scale(1.2); }
+}
+
+.shooting-star {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.1), 0 0 0 8px rgba(255, 255, 255, 0.1), 0 0 20px rgba(255, 255, 255, 1);
+    animation: shoot 2s linear forwards;
+}
+
+.shooting-star::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 80px;
+    height: 1px;
+    background: linear-gradient(90deg, white, transparent);
+}
+
+@keyframes shoot {
+    0% { transform: translateX(0) translateY(0) rotate(-45deg); opacity: 1; }
+    100% { transform: translateX(-400px) translateY(400px) rotate(-45deg); opacity: 0; }
+}
+
+/* --- ปุ่มกดอนิเมชั่น --- */
+.magic-btn {
+    display: inline-block;
+    padding: 10px 30px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff !important;
+    text-decoration: none;
+    background: linear-gradient(45deg, #7b2cbf, #4cc9f0);
+    border: none;
+    border-radius: 30px;
+    cursor: pointer;
+    box-shadow: 0 0 20px rgba(123, 44, 191, 0.5);
+    transition: transform 0.1s;
+    position: relative;
+    overflow: hidden;
+}
+
+.magic-btn:hover {
+    animation: shakeBounce 0.4s infinite;
+}
+
+@keyframes shakeBounce {
+    0%, 100% { transform: translateY(0) rotate(0); }
+    25% { transform: translateY(-3px) rotate(-2deg); }
+    50% { transform: translateY(0) rotate(2deg); }
+    75% { transform: translateY(-1px) rotate(-1deg); }
+}
+
+.magic-btn:active, .magic-btn.clicked {
+    transform: scale(0.9) !important;
+    box-shadow: 0 0 30px rgba(76, 201, 240, 0.8);
 }
