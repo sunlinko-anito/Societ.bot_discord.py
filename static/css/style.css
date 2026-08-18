@@ -1,20 +1,33 @@
 /* =========================================
-   1. พื้นหลัง (Background)
+   1. พื้นหลัง ( Background - โทนเข้มเป๊ะตามภาพ )
    ========================================= */
+html {
+    min-height: 100%;
+}
+
 body {
     margin: 0;
-    /* ไล่เฉดสีตามรูปภาพ: ม่วงสด (ซ้ายบน) -> น้ำเงินเข้ม (กลาง) -> เขียวมรกต (ขวาล่าง) */
+    min-height: 100vh; /* ยืดให้เต็มหน้าจอเสมอไม่ว่าเนื้อหาจะน้อยแค่ไหน */
+    
+    /* ถอดรหัสเฉดสีเข้มตรงตามภาพตัวอย่าง 100% */
     background: 
-        radial-gradient(circle at 5% 5%, rgba(168, 85, 247, 0.8) 0%, rgba(147, 51, 234, 0.4) 35%, transparent 60%),
-        radial-gradient(circle at 95% 95%, rgba(34, 197, 94, 0.85) 0%, rgba(21, 128, 61, 0.5) 40%, transparent 65%),
+        /* แสงเรืองม่วงเข้มมุมซ้ายบน */
+        radial-gradient(ellipse at 12% 12%, rgba(106, 13, 173, 0.55) 0%, rgba(53, 5, 99, 0.3) 35%, transparent 65%),
+        /* แสงเรืองเขียวเข้มมุมขวาล่าง */
+        radial-gradient(ellipse at 88% 88%, rgba(16, 94, 43, 0.65) 0%, rgba(6, 54, 23, 0.35) 40%, transparent 65%),
+        /* ฐานสีหลักแนวทแยง 135 องศา (ม่วงมืด -> น้ำเงินกรมท่าลึก -> เขียวมืด) */
         linear-gradient(135deg, 
-            #580099 0%, 
-            #38006b 20%, 
-            #0d144d 48%, 
-            #043319 75%, 
-            #0f7536 100%
+            #2d004d 0%, 
+            #1e003b 22%, 
+            #070b28 48%, 
+            #021f11 75%, 
+            #073b1a 100%
         ) !important;
-    background-attachment: fixed; /* ล็อกสีพื้นหลังไม่ให้ขยับตอนเลื่อนหน้าเว็บ */
+        
+    background-color: #070b28 !important;
+    background-attachment: fixed !important; /* ล็อกสีไม่ให้ขยับเวลาเลื่อนหน้า */
+    background-repeat: no-repeat !important; /* ป้องกันการวนซ้ำเป็นชั้นๆ */
+    background-size: cover !important;       /* ขยายสีให้ครอบคลุมเต็มพื้นที่ */
     color: white;
     font-family: sans-serif;
     overflow-x: hidden;
@@ -24,13 +37,13 @@ body {
    2. ระบบดวงดาว (Stars & Sky)
    ========================================= */
 .night-sky {
-    position: fixed; /* ให้ดาวอยู่กับที่เวลาเลื่อนหน้าจอ */
+    position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    pointer-events: none; /* ป้องกันไม่ให้ดาวไปบังการกดปุ่ม */
+    pointer-events: none;
 }
 
 /* --- 2.1 ดาวกระพริบปกติ --- */
@@ -46,7 +59,16 @@ body {
     100% { opacity: 1; transform: scale(1.2); }
 }
 
-/* --- 2.2 ดาวตก --- */
+/* --- 2.2 ฝุ่นดาว (Star Dust) --- */
+.dust-particle {
+    position: absolute;
+    background: white;
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* --- 2.3 ดาวตก --- */
 .shooting-star {
     position: absolute;
     width: 6px;
@@ -75,13 +97,13 @@ body {
     100% { transform: translateX(-900px) translateY(900px) rotate(-45deg); opacity: 0; }
 }
 
-/* --- 2.3 ดาวสว่างแบบมีแฉก 4 ทิศทาง (Cross-star) --- */
+/* --- 2.4 ดาวสว่างแบบมีแฉก 4 ทิศทาง (Cross-star) --- */
 .cross-star {
     position: absolute;
     width: 3px;
     height: 3px;
     background: white;
-    box-shadow: 0 0 15px 3px rgba(255, 255, 255, 1); /* แสงฟุ้งตรงกลาง */
+    box-shadow: 0 0 15px 3px rgba(255, 255, 255, 1);
     border-radius: 50%;
     animation: pulseGlow 2.5s infinite alternate ease-in-out;
 }
