@@ -1,5 +1,5 @@
 /* =========================================
-   1. พื้นหลังอวกาศ (สีน้ำเงินกรมท่าแบบภาพ 1027)
+   1. โครงสร้างหลัก (Body โปร่งใสเพื่อให้มองเห็นดาว)
    ========================================= */
 html {
     background-color: #061026 !important; 
@@ -8,7 +8,26 @@ html {
 body {
     margin: 0;
     min-height: 100vh;
+    background: transparent !important; /* เอาพื้นหลังออกจาก body เพื่อไม่ให้บังดาว */
+    color: white;
+    font-family: sans-serif;
+    overflow-x: hidden;
+}
+
+/* =========================================
+   2. ระบบดวงดาวและพื้นหลังอวกาศ (รวมเป็นเลเยอร์เดียวกัน)
+   ========================================= */
+.night-sky {
+    position: fixed; /* ใช้ fixed เพื่อให้พื้นหลังและดาวนิ่งสวยงามตลอดเวลาเลื่อนจอ */
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    pointer-events: none;
+    overflow: hidden;
     
+    /* ย้ายชุดสีอวกาศมาไว้ที่นี่ ดาวจะอยู่เหนือพื้นหลังนี้พอดี */
     background: linear-gradient(135deg, 
         #2e0454 0%,      /* ม่วงสว่างมุมซ้ายบน */
         #120a40 25%,     /* ค่อยๆ กลืนเป็นม่วงอมน้ำเงิน */
@@ -16,28 +35,9 @@ body {
         #06261b 75%,     /* ค่อยๆ กลืนเข้าสู่โทนเขียว */
         #15591b 100%     /* เขียวสว่างมุมขวาล่าง */
     ) !important;
-        
-    background-attachment: fixed !important;
+    
     background-size: cover !important;
     background-repeat: no-repeat !important;
-    color: white;
-    font-family: sans-serif;
-    overflow-x: hidden;
-}
-
-/* =========================================
-   2. ระบบดวงดาว (แก้ให้ดาวกระจายเต็มจอ ไม่ไปกองข้างบน)
-   ========================================= */
-.night-sky {
-    position: absolute; /* เปลี่ยนจาก fixed เป็น absolute เพื่อให้ยาวตามเนื้อหาหน้าเว็บ */
-    top: 0;
-    left: 0;
-    width: 100%;
-    min-height: 100%;   /* ขยายความสูงตามเนื้อหาจริง */
-    height: 100vh;      
-    z-index: -1;
-    pointer-events: none;
-    overflow: hidden;   /* ป้องกันไม่ให้ดาวล้นออกนอกจอจนเกิด Scrollbar แนวนอน */
 }
 
 /* --- 2.1 ดาวกระพริบปกติ --- */
