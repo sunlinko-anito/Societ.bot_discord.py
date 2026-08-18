@@ -1,5 +1,5 @@
 /* =========================================
-   1. พื้นหลังอวกาศ (แก้สีตามภาพ 1027.jpg ไม่ดำทึบ)
+   1. พื้นหลังอวกาศ (สีน้ำเงินกรมท่าแบบภาพ 1027)
    ========================================= */
 html {
     background-color: #061026 !important; 
@@ -9,14 +9,10 @@ body {
     margin: 0;
     min-height: 100vh;
     
-    /* 
-       ไล่สีจาก ม่วง -> น้ำเงินกรมท่ามืด -> เขียว 
-       (ไม่มีการใช้สีดำสนิท #000000 แล้ว)
-    */
     background: linear-gradient(135deg, 
         #2e0454 0%,      /* ม่วงสว่างมุมซ้ายบน */
         #120a40 25%,     /* ค่อยๆ กลืนเป็นม่วงอมน้ำเงิน */
-        #061026 50%,     /* ตรงกลางเป็นน้ำเงินกรมท่ามืด (แบบในรูป 1027.jpg) */
+        #061026 50%,     /* ตรงกลางเป็นน้ำเงินกรมท่ามืด */
         #06261b 75%,     /* ค่อยๆ กลืนเข้าสู่โทนเขียว */
         #15591b 100%     /* เขียวสว่างมุมขวาล่าง */
     ) !important;
@@ -28,7 +24,6 @@ body {
     font-family: sans-serif;
     overflow-x: hidden;
 }
-
 
 /* =========================================
    2. ระบบดวงดาว (Stars & Sky)
@@ -105,7 +100,6 @@ body {
     animation: pulseGlow 2.5s infinite alternate ease-in-out;
 }
 
-/* แฉกแนวตั้ง */
 .cross-star::before {
     content: '';
     position: absolute;
@@ -116,7 +110,6 @@ body {
     background: linear-gradient(to bottom, transparent 0%, rgba(255,255,255,1) 50%, transparent 100%);
 }
 
-/* แฉกแนวนอน */
 .cross-star::after {
     content: '';
     position: absolute;
@@ -171,7 +164,6 @@ body {
 /* =========================================
    4. ตกแต่งเสริม (UI Elements)
    ========================================= */
-/* สไตล์กล่องกระจกใส (Glassmorphism) สำหรับครอบเนื้อหา */
 .glass-panel {
     background: rgba(20, 25, 45, 0.6);
     backdrop-filter: blur(12px);
@@ -182,12 +174,10 @@ body {
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
 }
 
-/* สไตล์เรืองแสงสำหรับหัวข้อ */
 .title-glow {
     text-shadow: 0 0 10px rgba(76, 201, 240, 0.8), 0 0 20px rgba(123, 44, 191, 0.6);
 }
 
-/* สีปุ่มพิเศษ (เขียนทับสีหลักของ magic-btn) */
 .btn-admin { 
     background: linear-gradient(45deg, #e63946, #ffb703) !important; 
     box-shadow: 0 0 20px rgba(230, 57, 70, 0.5) !important;
